@@ -209,6 +209,11 @@ bool Backend::Initialize(const char* window_name, int width, int height, bool al
 	data->window_handle = window_handle;
 	data->system_interface.SetWindow(window_handle);
 
+	// Present an initialized black buffer before exposing the window. Loading
+	// fonts, documents and audio devices can delay the first application frame.
+	data->render_interface->Clear(data->device_resources.pMainRenderTargetView);
+	data->device_resources.pSwapChain->Present(0, 0);
+
 	// Now we are ready to show the window.
 	::ShowWindow(window_handle, SW_SHOW);
 	::SetForegroundWindow(window_handle);
@@ -432,7 +437,9 @@ static HWND InitializeWindow(HINSTANCE instance_handle, const std::wstring& name
 	window_class.hInstance = instance_handle;
 	window_class.hIcon = LoadIcon(nullptr, IDI_WINLOGO);
 	window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-	window_class.hbrBackground = nullptr;
+	// Cover the client area in black before Direct3D's first visible frame,
+	// including any paint triggered while creating or showing the window.
+	window_class.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
 	window_class.lpszMenuName = nullptr;
 	window_class.lpszClassName = name.data();
 
