@@ -138,8 +138,12 @@ void PluginEditor::layoutSurface() {
     bool surfaceTopmost=(GetWindowLongW(surface_,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;
     if(topmost!=surfaceTopmost)
         SetWindowPos(surface_,topmost?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    // Keep the native surface above its owner without lifting another app's
+    // background windows. Windows can raise the owner independently.
+    for(auto above=GetWindow(surface_,GW_HWNDPREV);above;above=GetWindow(above,GW_HWNDPREV))
+        if(above==window_) { SetWindowPos(window_,surface_,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOOWNERZORDER); break; }
     if(foreground==window_ || foreground==surface_ || IsChild(surface_,foreground))
-        SetWindowPos(surface_,topmost?HWND_TOPMOST:HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+        SetWindowPos(surface_,topmost?HWND_TOPMOST:HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOOWNERZORDER);
 }
 void PluginEditor::update() {
     if(tab_==2) for(size_t i=0;i<ids_.size();++i) { double value=plugin_.controller_->getParamNormalized(ids_[i]); if(!std::isfinite(value)) continue; value=std::clamp(value,0.,1.); if(std::abs(values_[i]-value)<.00001) continue; values_[i]=value;

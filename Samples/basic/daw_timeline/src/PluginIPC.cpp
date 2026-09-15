@@ -113,6 +113,7 @@ void RemotePlugin::process(float* left,float* right,int frames,double beat,doubl
 }
 bool RemotePlugin::openEditor(std::string& error) {
     if (!alive()) { error="Plugin worker exited; reload plugin"; return false; }
+    AllowSetForegroundWindow(workerId());
     InterlockedExchange(&ipc_->editorResult,0); InterlockedExchange(&ipc_->editor,1);
     auto deadline=GetTickCount64()+5000; while(alive() && !InterlockedCompareExchange(&ipc_->editorResult,0,0) && GetTickCount64()<deadline) Sleep(10);
     if(InterlockedCompareExchange(&ipc_->editorResult,0,0)!=1) { error=ipc_->error[0]?ipc_->error:"Editor startup timed out"; return false; } return true;
