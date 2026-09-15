@@ -123,9 +123,18 @@ bool TypeConverter<AnimationList, String>::Convert(const AnimationList& src, Str
 		if (a.delay > 0.0f && TypeConverter<float, String>::Convert(a.delay, tmp))
 			dest += tmp + "s ";
 		if (a.alternate)
-			dest += "alternate ";
+			dest += (a.reverse ? "alternate-reverse " : "alternate ");
+		else if (a.reverse)
+			dest += "reverse ";
 		if (a.paused)
 			dest += "paused ";
+		switch (a.fill_mode)
+		{
+		case AnimationFillMode::Forwards: dest += "forwards "; break;
+		case AnimationFillMode::Backwards: dest += "backwards "; break;
+		case AnimationFillMode::Both: dest += "both "; break;
+		default: break;
+		}
 		if (a.num_iterations == -1)
 			dest += "infinite ";
 		else if (TypeConverter<int, String>::Convert(a.num_iterations, tmp))

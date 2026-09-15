@@ -1,13 +1,33 @@
-﻿# RmlUi - The HTML/CSS User Interface Library Evolved
+﻿# KinuUI - Native C++ UI with familiar HTML/CSS motion
 
-![RmlUi logo](https://github.com/mikke89/RmlUiDoc/raw/c7253748d1bcf6dd33d97ab4fe8b6731a7ee3dac/assets/rmlui.png)
+KinuUI is a compatibility-focused fork of [RmlUi](https://github.com/mikke89/RmlUi). It keeps the existing C++ namespace, public names, CMake targets, and RML/RCSS workflow so applications can migrate without a disruptive rename.
 
-RmlUi - now with added boosters taking control of the rocket, targeting *your* games and applications.
+KinuUI adds browser-familiar animation syntax, Animate.css 4.1.1 compatibility tooling, smoother default rendering, and an executable motion demo. See [KINUUI.md](KINUUI.md) for the exact compatibility contract and verification results.
+
+![KinuUI CSS motion demo](Screenshots/kinuui-css-motion-demo.png)
+
+The responsive 800 x 500 layout is captured in [the compact screenshot](Screenshots/kinuui-css-motion-demo-compact.png).
+
+The bundled demo is a native DirectX/OpenGL application, not a browser capture. Regular KinuUI builds include on-demand Tracy instrumentation and use mimalloc for C++ allocations.
+
+## Quick start
+
+Clone with the pinned runtime dependencies, then build the native motion demo:
+
+```powershell
+git clone --recursive https://github.com/SakiikaVR/KinuUI.git
+cd KinuUI
+cmake -S . -B build -DRMLUI_BACKEND=Win32_DX11 -DRMLUI_SAMPLES=ON -DRMLUI_FONT_ENGINE=freetype
+cmake --build build --config Release --target rmlui_sample_kinu_css_animations
+.\build\Release\rmlui_sample_kinu_css_animations.exe
+```
+
+The packaged Windows demo is also attached to the KinuUI 0.1.0 release and can be launched with `Run-KinuUI-Demo.cmd`.
 
 ---
 
 [![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://rmlui.zulipchat.com)
-[![Build](https://github.com/mikke89/RmlUi/actions/workflows/build.yml/badge.svg)](https://github.com/mikke89/RmlUi/actions/workflows/build.yml)
+[![Build](https://github.com/SakiikaVR/KinuUI/actions/workflows/build.yml/badge.svg)](https://github.com/SakiikaVR/KinuUI/actions/workflows/build.yml)
 [![Build status](https://ci.appveyor.com/api/projects/status/x95oi8mrb001pqhh/branch/master?svg=true)](https://ci.appveyor.com/project/mikke89/rmlui/branch/master)
 
 RmlUi is the C++ user interface package based on the HTML and CSS standards, designed as a complete solution for any project's interface needs. It is a fork of the [libRocket](https://github.com/libRocket/libRocket) project, introducing new features, bug fixes, and performance improvements.
@@ -78,6 +98,8 @@ RmlUi adds features and enhancements over CSS and HTML where it makes sense, mos
 ## Dependencies
 
 - [FreeType](https://www.freetype.org/). However, it can be fully replaced by a custom [font engine](https://mikke89.github.io/RmlUiDoc/pages/cpp_manual/interfaces/font_engine.html).
+- [mimalloc](https://github.com/microsoft/mimalloc), pinned as a mandatory submodule for C++ allocation.
+- [Tracy](https://github.com/wolfpld/tracy), pinned as a mandatory submodule with on-demand profiling enabled in regular configurations.
 - The standard library.
 
 In addition, a C++17 compatible compiler is required.

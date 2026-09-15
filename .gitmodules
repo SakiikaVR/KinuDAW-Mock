@@ -1,0 +1,6 @@
+[submodule "Dependencies/tracy"]
+	path = Dependencies/tracy
+	url = https://github.com/wolfpld/tracy.git
+[submodule "Dependencies/mimalloc"]
+	path = Dependencies/mimalloc
+	url = https://github.com/microsoft/mimalloc.git

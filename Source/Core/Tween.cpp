@@ -1,5 +1,6 @@
 #include "../../Include/RmlUi/Core/Tween.h"
 #include "../../Include/RmlUi/Core/Math.h"
+#include <cstdio>
 #include <utility>
 
 namespace Rml {
@@ -102,8 +103,52 @@ Tween::Tween(CallbackFnc callback, Direction direction) : callback(callback)
 	if (direction & Out)
 		type_out = Callback;
 }
+Tween Tween::CubicBezier(float x1, float y1, float x2, float y2)
+{
+	Tween result;
+	result.is_cubic_bezier = true;
+	result.cubic_bezier[0] = x1;
+	result.cubic_bezier[1] = y1;
+	result.cubic_bezier[2] = x2;
+	result.cubic_bezier[3] = y2;
+	return result;
+}
 float Tween::operator()(float t) const
 {
+	if (is_cubic_bezier)
+	{
+		if (t <= 0.f)
+			return 0.f;
+		if (t >= 1.f)
+			return 1.f;
+		const float x1 = cubic_bezier[0], y1 = cubic_bezier[1], x2 = cubic_bezier[2], y2 = cubic_bezier[3];
+		auto Sample = [](float u, float p1, float p2) {
+			const float v = 1.f - u;
+			return 3.f * v * v * u * p1 + 3.f * v * u * u * p2 + u * u * u;
+		};
+		auto Slope = [](float u, float p1, float p2) {
+			const float v = 1.f - u;
+			return 3.f * v * v * p1 + 6.f * v * u * (p2 - p1) + 3.f * u * u * (1.f - p2);
+		};
+		float u = Math::Clamp(t, 0.f, 1.f);
+		for (int i = 0; i < 8; ++i)
+		{
+			const float slope = Slope(u, x1, x2);
+			if (Math::Absolute(slope) < 1e-6f)
+				break;
+			u = Math::Clamp(u - (Sample(u, x1, x2) - t) / slope, 0.f, 1.f);
+		}
+		float lo = 0.f, hi = 1.f;
+		for (int i = 0; i < 10; ++i)
+		{
+			if (Sample(u, x1, x2) < t)
+				lo = u;
+			else
+				hi = u;
+			u = 0.5f * (lo + hi);
+		}
+		return Sample(u, y1, y2);
+	}
 	if (type_in != None && type_out == None)
 	{
 		return in(t);
@@ -121,12 +166,24 @@ float Tween::operator()(float t) const
 
 void Tween::reverse()
 {
+	if (is_cubic_bezier)
+	{
+		const float x1 = cubic_bezier[0], y1 = cubic_bezier[1];
+		cubic_bezier[0] = 1.f - cubic_bezier[2];
+		cubic_bezier[1] = 1.f - cubic_bezier[3];
+		cubic_bezier[2] = 1.f - x1;
+		cubic_bezier[3] = 1.f - y1;
+		return;
+	}
 	std::swap(type_in, type_out);
 }
 
 bool Tween::operator==(const Tween& other) const
 {
-	return type_in == other.type_in && type_out == other.type_out && callback == other.callback;
+	return type_in == other.type_in && type_out == other.type_out && callback == other.callback && is_cubic_bezier == other.is_cubic_bezier &&
+		(!is_cubic_bezier ||
+			(cubic_bezier[0] == other.cubic_bezier[0] && cubic_bezier[1] == other.cubic_bezier[1] && cubic_bezier[2] == other.cubic_bezier[2] &&
+				cubic_bezier[3] == other.cubic_bezier[3]));
 }
 
 bool Tween::operator!=(const Tween& other) const
@@ -136,6 +193,12 @@ bool Tween::operator!=(const Tween& other) const
 
 String Tween::to_string() const
 {
+	if (is_cubic_bezier)
+	{
+		char value[96];
+		std::snprintf(value, sizeof(value), "cubic-bezier(%g, %g, %g, %g)", cubic_bezier[0], cubic_bezier[1], cubic_bezier[2], cubic_bezier[3]);
+		return value;
+	}
 	static const Array<String, size_t(Count)> type_str = {
 		{"none", "back", "bounce", "circular", "cubic", "elastic", "exponential", "linear", "quadratic", "quartic", "quintic", "sine", "callback"}};
 

@@ -19,6 +19,8 @@ add_library(rmlui_core
 	ContextInstancerDefault.cpp
 	ContextInstancerDefault.h
 	ControlledLifetimeResource.h
+	KinuMemory.cpp
+	KinuMemory.h
 	ConvolutionFilter.cpp
 	Core.cpp
 	DataController.cpp
@@ -402,6 +404,8 @@ if(RMLUI_FONT_ENGINE STREQUAL "freetype")
 	# From CMake 3.13 the next line can be moved into `FontEngineDefault/CMakeLists.txt`, see CMP0079.
 	target_link_libraries(rmlui_core PRIVATE Freetype::Freetype)
 endif()
+
+target_link_libraries(rmlui_core PRIVATE mimalloc-static)
 
 if(RMLUI_LOTTIE_PLUGIN)
 	# RMLUI_CMAKE_MINIMUM_VERSION_RAISE_NOTICE:

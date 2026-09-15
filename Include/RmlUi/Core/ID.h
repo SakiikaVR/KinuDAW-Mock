@@ -124,6 +124,14 @@ enum class PropertyId : uint8_t {
 
 	Transition,
 	Animation,
+	AnimationName,
+	AnimationDuration,
+	AnimationDelay,
+	AnimationTimingFunction,
+	AnimationIterationCount,
+	AnimationDirection,
+	AnimationFillMode,
+	AnimationPlayState,
 
 	Opacity,
 	PointerEvents,
@@ -188,15 +196,15 @@ enum class MediaQueryId : uint8_t {
 enum class FontFaceId : uint8_t {
 	Invalid,
 
-    // standard
+	// standard
 	FontFamily,
 	FontWeight,
 	FontStyle,
 	Src,
 
-    // extended
-    FallbackFace,
-    FaceIndex,
+	// extended
+	FallbackFace,
+	FaceIndex,
 
 	NumDefinedIds
 };

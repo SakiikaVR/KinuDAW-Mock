@@ -686,7 +686,7 @@ private:
 
 	/// Start an animation, replacing any existing animations of the same property name. If start_value is null, the element's current value is used.
 	ElementAnimationList::iterator StartAnimation(PropertyId property_id, const Property* start_value, int num_iterations, bool alternate_direction,
-		float delay, bool initiated_by_animation_property);
+		float delay, bool initiated_by_animation_property, bool reverse_direction = false, bool retain_final_value = false);
 
 	/// Add a key to an animation, extending its duration. If target_value is null, the element's current value is used.
 	bool AddAnimationKeyTime(PropertyId property_id, const Property* target_value, float time, Tween tween);
@@ -783,6 +783,7 @@ private:
 	UniquePtr<TransformState> transform_state;
 
 	ElementAnimationList animations;
+	Vector<PropertyId> retained_animation_properties;
 
 	ElementMeta* meta;
 

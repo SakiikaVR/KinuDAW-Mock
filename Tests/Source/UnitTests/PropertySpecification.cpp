@@ -238,6 +238,9 @@ TEST_CASE("PropertySpecification.ParsePropertyDeclaration.variables")
 		ParseProperty("width", "10px", Unit::PX);
 		ParseProperty("width", "var(--w)", Unit::VAR_EXPRESSION);
 		ParseProperty("width", "calc(var(--w) * 2)", Unit::VAR_EXPRESSION);
+		ParseProperty("animation-name", "bounce", Unit::STRING);
+		ParseProperty("animation-duration", "var(--animate-duration)", Unit::VAR_EXPRESSION);
+		ParseProperty("animation-iteration-count", "calc(var(--animate-repeat) * 2)", Unit::VAR_EXPRESSION);
 	}
 
 	SUBCASE("custom property")
@@ -447,6 +450,14 @@ TEST_CASE("PropertyParser.InvalidShorthands")
 		{false, "filter", "drop-shadow(10px 20px 30px blue)"},      // Wrong order
 		{false, "filter", "drop-shadow(10px blue 20px 30px)"},      // Wrong order
 		{false, "filter", "drop-shadow(blue 10px 20px 30px 40px)"}, // Too many values
+		{true, "animation", "popup 600ms ease-in-out 0s both"},     // Standard CSS ordering, units, easing, and fill mode
+		{true, "animation", "pulse 1s linear infinite alternate"},  // Standard timing keyword
+		{true, "animation", "move 1s cubic-bezier(0.87, 0.05, 0.02, 0.97)"},
+		{false, "animation", "move 1s cubic-bezier(1.2, 0, 0, 1)"}, // CSS requires x control points in [0, 1]
+
+		{true, "border", "1px solid #fe587a"},                      // CSS-compatible solid style token
+		{true, "border-top", "solid 2px red"},                      // Style token can appear in any position
+		{false, "border-left", "1px dashed red"},                   // Unsupported styles remain invalid
 
 		{true, "overflow", "hidden"},                               //
 		{true, "overflow", "scroll hidden"},                        //

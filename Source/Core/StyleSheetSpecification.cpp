@@ -398,6 +398,16 @@ void StyleSheetSpecification::RegisterDefaultProperties()
 
 	RegisterProperty(PropertyId::Transition, "transition", "none", false, false).AddParser("transition");
 	RegisterProperty(PropertyId::Animation, "animation", "none", false, false).AddParser("animation");
+	// CSS animation longhands. Keeping their specified string form lets custom properties be
+	// resolved before the values are combined into the internal Animation representation.
+	RegisterProperty(PropertyId::AnimationName, "animation-name", "none", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationDuration, "animation-duration", "0s", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationDelay, "animation-delay", "0s", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationTimingFunction, "animation-timing-function", "ease", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationIterationCount, "animation-iteration-count", "1", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationDirection, "animation-direction", "normal", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationFillMode, "animation-fill-mode", "none", false, false).AddParser("string");
+	RegisterProperty(PropertyId::AnimationPlayState, "animation-play-state", "running", false, false).AddParser("string");
 
 	// Decorators and effects
 	RegisterProperty(PropertyId::Decorator, "decorator", "", false, false).AddParser("decorator");

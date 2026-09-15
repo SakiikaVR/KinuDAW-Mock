@@ -25,6 +25,7 @@ public:
 
 	static void Initialize();
 	static void Shutdown();
+	static bool ParseTweenValue(const String& value, Tween& tween);
 
 private:
 	static bool ParseAnimation(Property& property, const StringList& animation_values);

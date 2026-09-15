@@ -4,6 +4,7 @@ add_subdirectory("bitmap_font")
 # Only enable the remaining samples if a default font engine is selected.
 if(RMLUI_FONT_ENGINE_ENABLED)
 	add_subdirectory("animation")
+	add_subdirectory("kinu_css_animations")
 	add_subdirectory("benchmark")
 	add_subdirectory("custom_log")
 	add_subdirectory("data_binding")

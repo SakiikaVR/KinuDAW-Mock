@@ -16,6 +16,21 @@ if(RMLUI_FONT_ENGINE STREQUAL "freetype")
 	endif()
 
 	report_dependency_found_or_error("Freetype" "Freetype" Freetype::Freetype "Freetype font engine enabled")
+
+endif()
+
+if(NOT RMLUI_IS_CONFIG_FILE)
+	# KinuUI uses mimalloc for all C++ allocations made through the linked core.
+	# Only the static library is needed; the override itself lives in one core TU.
+	if(NOT EXISTS "${PROJECT_SOURCE_DIR}/Dependencies/mimalloc/CMakeLists.txt")
+		message(FATAL_ERROR "KinuUI requires its mimalloc submodule. Run `git submodule update --init --recursive`.")
+	endif()
+	set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+	set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
+	set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
+	set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(MI_OVERRIDE OFF CACHE BOOL "" FORCE)
+	add_subdirectory("Dependencies/mimalloc" EXCLUDE_FROM_ALL)
 endif()
 
 if(RMLUI_LOTTIE_PLUGIN)
@@ -78,30 +93,17 @@ if(RMLUI_HARFBUZZ_SAMPLE)
 endif()
 
 if(RMLUI_TRACY_PROFILING)
-	find_package(Tracy CONFIG QUIET)
-
 	if(RMLUI_IS_CONFIG_FILE)
+		find_package(Tracy CONFIG QUIET)
 		report_dependency_found_or_error("Tracy" "Tracy" Tracy::TracyClient)
-	endif()
-
-	if(NOT TARGET Tracy::TracyClient)
-		message(STATUS "Trying to add Tracy from subdirectory 'Dependencies/tracy'.")
+	else()
+		if(NOT EXISTS "${PROJECT_SOURCE_DIR}/Dependencies/tracy/CMakeLists.txt")
+			message(FATAL_ERROR "KinuUI requires its Tracy submodule. Run `git submodule update --init --recursive`.")
+		endif()
+		set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+		set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+		set(TRACY_STATIC ON CACHE BOOL "" FORCE)
+		message(STATUS "Adding mandatory Tracy from 'Dependencies/tracy'.")
 		add_subdirectory("Dependencies/tracy")
-
-		if(NOT TARGET Tracy::TracyClient)
-			message(FATAL_ERROR "Tracy client not found. Either "
-				"(a) make sure target Tracy::TracyClient is available from parent project, "
-				"(b) Tracy can be found as a config package, or "
-				"(c) Tracy source files are located in 'Dependencies/Tracy'.")
-		endif()
-
-		if(RMLUI_IS_ROOT_PROJECT)
-			# Tracy does not export its targets to the build tree. Do that for it here, otherwise CMake will emit an
-			# error about target `TracyClient` not being located in any export set.
-			export(EXPORT TracyConfig
-				NAMESPACE Tracy::
-				FILE TracyTargets.cmake
-			)
-		endif()
 	endif()
 endif()

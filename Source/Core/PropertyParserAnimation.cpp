@@ -7,7 +7,7 @@
 
 namespace Rml {
 
-enum class KeywordType { None, Tween, All, Alternate, Infinite, Paused };
+enum class KeywordType { None, Tween, All, Alternate, Reverse, AlternateReverse, Infinite, Paused, Running, Forwards, Backwards, Both, Normal };
 
 struct Keyword {
 	KeywordType type;
@@ -18,8 +18,9 @@ struct Keyword {
 	bool ValidTransition() const { return type == KeywordType::None || type == KeywordType::Tween || type == KeywordType::All; }
 	bool ValidAnimation() const
 	{
-		return type == KeywordType::None || type == KeywordType::Tween || type == KeywordType::Alternate || type == KeywordType::Infinite ||
-			type == KeywordType::Paused;
+		return type == KeywordType::None || type == KeywordType::Tween || type == KeywordType::Alternate || type == KeywordType::Reverse ||
+			type == KeywordType::AlternateReverse || type == KeywordType::Infinite || type == KeywordType::Paused || type == KeywordType::Running ||
+			type == KeywordType::Forwards || type == KeywordType::Backwards || type == KeywordType::Both || type == KeywordType::Normal;
 	}
 };
 
@@ -28,8 +29,21 @@ struct PropertyParserAnimationData {
 		{"none", {KeywordType::None}},
 		{"all", {KeywordType::All}},
 		{"alternate", {KeywordType::Alternate}},
+		{"reverse", {KeywordType::Reverse}},
+		{"alternate-reverse", {KeywordType::AlternateReverse}},
 		{"infinite", {KeywordType::Infinite}},
 		{"paused", {KeywordType::Paused}},
+		{"running", {KeywordType::Running}},
+		{"forwards", {KeywordType::Forwards}},
+		{"backwards", {KeywordType::Backwards}},
+		{"both", {KeywordType::Both}},
+		{"normal", {KeywordType::Normal}},
+
+		{"linear", {Tween{Tween::Linear, Tween::In}}},
+		{"ease", {Tween::CubicBezier(0.25f, 0.1f, 0.25f, 1.f)}},
+		{"ease-in", {Tween::CubicBezier(0.42f, 0.f, 1.f, 1.f)}},
+		{"ease-out", {Tween::CubicBezier(0.f, 0.f, 0.58f, 1.f)}},
+		{"ease-in-out", {Tween::CubicBezier(0.42f, 0.f, 0.58f, 1.f)}},
 
 		{"back-in", {Tween{Tween::Back, Tween::In}}},
 		{"back-out", {Tween{Tween::Back, Tween::Out}}},
@@ -91,10 +105,31 @@ void PropertyParserAnimation::Shutdown()
 
 PropertyParserAnimation::PropertyParserAnimation(Type type) : type(type) {}
 
+bool PropertyParserAnimation::ParseTweenValue(const String& value, Tween& tween)
+{
+	const String lowercase_value = StringUtilities::ToLower(StringUtilities::StripWhitespace(value));
+	auto it = parser_data->keywords.find(lowercase_value);
+	if (it != parser_data->keywords.end() && it->second.type == KeywordType::Tween)
+	{
+		tween = it->second.tween;
+		return true;
+	}
+
+	float bezier[4] = {};
+	int count = 0;
+	if (sscanf(lowercase_value.c_str(), "cubic-bezier(%f,%f,%f,%f)%n", &bezier[0], &bezier[1], &bezier[2], &bezier[3], &count) == 4 &&
+		count == (int)lowercase_value.size() && bezier[0] >= 0.f && bezier[0] <= 1.f && bezier[2] >= 0.f && bezier[2] <= 1.f)
+	{
+		tween = Tween::CubicBezier(bezier[0], bezier[1], bezier[2], bezier[3]);
+		return true;
+	}
+	return false;
+}
+
 bool PropertyParserAnimation::ParseValue(Property& property, const String& value, const ParameterMap& /*parameters*/) const
 {
 	StringList list_of_values;
-	StringUtilities::ExpandString(list_of_values, value, ',');
+	StringUtilities::ExpandString(list_of_values, value, ',', '(', ')');
 
 	bool result = false;
 	if (type == ANIMATION_PARSER)
@@ -118,7 +153,7 @@ bool PropertyParserAnimation::ParseAnimation(Property& property, const StringLis
 		Animation animation;
 
 		StringList arguments;
-		StringUtilities::ExpandString(arguments, single_animation_value, ' ');
+		StringUtilities::ExpandString(arguments, single_animation_value, ' ', '(', ')');
 
 		bool duration_found = false;
 		bool delay_found = false;
@@ -129,8 +164,9 @@ bool PropertyParserAnimation::ParseAnimation(Property& property, const StringLis
 			if (argument.empty())
 				continue;
 
+			const String lowercase_argument = StringUtilities::ToLower(argument);
 			// See if we have a <keyword> or <tween> specifier as defined in keywords
-			auto it = parser_data->keywords.find(StringUtilities::ToLower(argument));
+			auto it = parser_data->keywords.find(lowercase_argument);
 			if (it != parser_data->keywords.end() && it->second.ValidAnimation())
 			{
 				switch (it->second.type)
@@ -145,6 +181,8 @@ bool PropertyParserAnimation::ParseAnimation(Property& property, const StringLis
 				break;
 				case KeywordType::Tween: animation.tween = it->second.tween; break;
 				case KeywordType::Alternate: animation.alternate = true; break;
+				case KeywordType::Reverse: animation.reverse = true; break;
+				case KeywordType::AlternateReverse: animation.alternate = animation.reverse = true; break;
 				case KeywordType::Infinite:
 					if (num_iterations_found)
 						return false;
@@ -152,6 +190,11 @@ bool PropertyParserAnimation::ParseAnimation(Property& property, const StringLis
 					num_iterations_found = true;
 					break;
 				case KeywordType::Paused: animation.paused = true; break;
+				case KeywordType::Running: break;
+				case KeywordType::Forwards: animation.fill_mode = AnimationFillMode::Forwards; break;
+				case KeywordType::Backwards: animation.fill_mode = AnimationFillMode::Backwards; break;
+				case KeywordType::Both: animation.fill_mode = AnimationFillMode::Both; break;
+				case KeywordType::Normal: break;
 				default: break;
 				}
 			}
@@ -161,36 +204,55 @@ bool PropertyParserAnimation::ParseAnimation(Property& property, const StringLis
 				float number = 0.0f;
 				int count = 0;
 
-				if (sscanf(argument.c_str(), "%fs%n", &number, &count) == 1)
+				Tween parsed_tween;
+				if (ParseTweenValue(lowercase_argument, parsed_tween))
 				{
-					// Found a number, if there was an 's' unit, count will be positive
-					if (count > 0)
+					animation.tween = parsed_tween;
+				}
+				else if (lowercase_argument.find("cubic-bezier(") == 0)
+				{
+					return false;
+				}
+				else if ((count = 0, sscanf(argument.c_str(), "%fms%n", &number, &count) == 1) && count == (int)argument.size())
+				{
+					number *= 0.001f;
+					if (!duration_found)
 					{
-						// Duration or delay was assigned
-						if (!duration_found)
-						{
-							duration_found = true;
-							animation.duration = number;
-						}
-						else if (!delay_found)
-						{
-							delay_found = true;
-							animation.delay = number;
-						}
-						else
-							return false;
+						duration_found = true;
+						animation.duration = number;
+					}
+					else if (!delay_found)
+					{
+						delay_found = true;
+						animation.delay = number;
 					}
 					else
+						return false;
+				}
+				else if ((count = 0, sscanf(argument.c_str(), "%fs%n", &number, &count) == 1) && count == (int)argument.size())
+				{
+					if (!duration_found)
 					{
-						// No 's' unit means num_iterations was found
-						if (!num_iterations_found)
-						{
-							animation.num_iterations = Math::RoundToInteger(number);
-							num_iterations_found = true;
-						}
-						else
-							return false;
+						duration_found = true;
+						animation.duration = number;
 					}
+					else if (!delay_found)
+					{
+						delay_found = true;
+						animation.delay = number;
+					}
+					else
+						return false;
+				}
+				else if ((count = 0, sscanf(argument.c_str(), "%f%n", &number, &count) == 1) && count == (int)argument.size())
+				{
+					if (!num_iterations_found)
+					{
+						animation.num_iterations = Math::RoundToInteger(number);
+						num_iterations_found = true;
+					}
+					else
+						return false;
 				}
 				else
 				{

@@ -14,6 +14,8 @@ public:
 	Tween(Type type = Linear, Direction direction = Out);
 	Tween(Type type_in, Type type_out);
 	Tween(CallbackFnc callback, Direction direction = In);
+	/// Construct a CSS-compatible cubic-bezier timing function. The x control points must be in [0, 1].
+	static Tween CubicBezier(float x1, float y1, float x2, float y2);
 
 	// Evaluate the Tweening function at point t in [0, 1].
 	float operator()(float t) const;
@@ -35,6 +37,8 @@ private:
 	Type type_in = None;
 	Type type_out = None;
 	CallbackFnc callback = nullptr;
+	bool is_cubic_bezier = false;
+	float cubic_bezier[4] = {};
 };
 
 } // namespace Rml

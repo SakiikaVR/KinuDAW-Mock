@@ -307,6 +307,19 @@ bool PropertySpecification::ParseShorthandDeclaration(PropertyDictionary& dictio
 	}
 	RMLUI_ASSERT(!property_values.empty());
 
+	// CSS includes the visual border style in its border shorthands. RmlUi renders solid borders only,
+	// so accept an explicit `solid` token as a compatibility no-op while keeping unsupported styles invalid.
+	const bool is_border_edge = shorthand_id == ShorthandId::BorderTop || shorthand_id == ShorthandId::BorderRight ||
+		shorthand_id == ShorthandId::BorderBottom || shorthand_id == ShorthandId::BorderLeft;
+	if (is_border_edge)
+	{
+		auto it = std::find(property_values.begin(), property_values.end(), "solid");
+		if (it != property_values.end())
+			property_values.erase(it);
+		if (property_values.empty())
+			return false;
+	}
+
 	// Handle the special behavior of the flex shorthand first, otherwise it acts like 'FallThrough'.
 	if (shorthand_definition->type == ShorthandType::Flex && !property_values.empty())
 	{

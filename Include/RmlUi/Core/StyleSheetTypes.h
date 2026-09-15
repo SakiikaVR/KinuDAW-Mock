@@ -2,6 +2,7 @@
 
 #include "Factory.h"
 #include "PropertyDictionary.h"
+#include "Tween.h"
 #include "Types.h"
 #include "Utilities.h"
 
@@ -16,6 +17,8 @@ struct KeyframeBlock {
 	KeyframeBlock(float normalized_time) : normalized_time(normalized_time) {}
 	float normalized_time; // [0, 1]
 	PropertyDictionary properties;
+	Tween tween;
+	bool has_tween = false;
 };
 struct Keyframes {
 	Vector<PropertyId> property_ids;

@@ -1,3 +1,4 @@
+* [KinuUI 0.1.0](#kinuui-010)
 * [RmlUi 6.3](#rmlui-63)
 * [RmlUi 6.2](#rmlui-62)
 * [RmlUi 6.1](#rmlui-61)
@@ -14,6 +15,17 @@
 * [RmlUi 3.1](#rmlui-31)
 * [RmlUi 3.0](#rmlui-30)
 * [RmlUi 2.0](#rmlui-20)
+
+## KinuUI 0.1.0
+
+- Added CSS-compatible cubic-bezier timing, CSS easing aliases, milliseconds, direction, fill mode, and play-state parsing.
+- Added all eight CSS animation longhands, variable resolution, Animate.css-style simple `calc()` values, and per-keyframe timing functions.
+- Added an Animate.css 4.1.1 preparation utility and audited all 97 named keyframes and their transform functions.
+- Raised multisample anti-aliasing defaults from 2x to 4x on supported sample backends.
+- Added the responsive `rmlui_sample_kinu_css_animations` executable demo with freeze and replay controls.
+- Accepted the CSS `solid` border-style token for compatibility.
+- Integrated pinned mimalloc 3.5.1 as the global C++ allocator and Tracy 0.14.1 as on-demand instrumentation in regular build configurations.
+- Added shared optical baseline correction to the demo's compact controls and status labels.
 
 ## RmlUi 6.3
 

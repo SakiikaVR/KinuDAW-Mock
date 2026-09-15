@@ -138,7 +138,7 @@ bool Backend::Initialize(const char* window_name, int width, int height, bool al
 
 	// Enable MSAA for better-looking visuals, especially when transforms are applied.
 	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 2);
+	SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 
 #if SDL_MAJOR_VERSION >= 3
 	auto CreateWindow = [&]() {

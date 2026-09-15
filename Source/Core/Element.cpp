@@ -12,6 +12,7 @@
 #include "../../Include/RmlUi/Core/PropertiesIteratorView.h"
 #include "../../Include/RmlUi/Core/PropertyDefinition.h"
 #include "../../Include/RmlUi/Core/PropertyIdSet.h"
+#include "../../Include/RmlUi/Core/StringUtilities.h"
 #include "../../Include/RmlUi/Core/StyleSheet.h"
 #include "../../Include/RmlUi/Core/StyleSheetSpecification.h"
 #include "../../Include/RmlUi/Core/TransformPrimitive.h"
@@ -42,6 +43,47 @@ namespace Rml {
 
 // Determines how many levels up in the hierarchy the OnChildAdd and OnChildRemove are called (starting at the child itself)
 static constexpr int ChildNotifyLevels = 2;
+
+static String ResolveSimpleAnimationCalc(String value)
+{
+	value = StringUtilities::StripWhitespace(value);
+	if (value.size() < 7 || value.substr(0, 5) != "calc(" || value.back() != ')')
+		return value;
+
+	String expression = StringUtilities::StripWhitespace(value.substr(5, value.size() - 6));
+	size_t operator_position = expression.find('*');
+	bool divide = false;
+	if (operator_position == String::npos)
+	{
+		operator_position = expression.find('/');
+		divide = true;
+	}
+	if (operator_position == String::npos)
+		return value;
+
+	String lhs = StringUtilities::StripWhitespace(expression.substr(0, operator_position));
+	String rhs = StringUtilities::StripWhitespace(expression.substr(operator_position + 1));
+	float lhs_number = 0.f, rhs_number = 0.f;
+	int lhs_count = 0, rhs_count = 0;
+	if (sscanf(lhs.c_str(), "%f%n", &lhs_number, &lhs_count) != 1 || lhs_count <= 0 || sscanf(rhs.c_str(), "%f%n", &rhs_number, &rhs_count) != 1 ||
+		rhs_count != (int)rhs.size() || (divide && rhs_number == 0.f))
+		return value;
+	const String unit = lhs.substr(lhs_count);
+	if (!(unit.empty() || unit == "s" || unit == "ms"))
+		return value;
+
+	const float result = divide ? lhs_number / rhs_number : lhs_number * rhs_number;
+	return CreateString("%g%s", result, unit.c_str());
+}
+
+static StringList SplitAnimationLonghand(const String& value)
+{
+	StringList result;
+	StringUtilities::ExpandString(result, value, ',', '(', ')');
+	for (String& item : result)
+		item = ResolveSimpleAnimationCalc(item);
+	return result;
+}
 
 // Helper function to select scroll offset delta
 static float GetScrollOffsetDelta(ScrollAlignment alignment, float begin_offset, float end_offset)
@@ -1965,7 +2007,11 @@ void Element::OnPropertyChange(const PropertyIdSet& changed_properties)
 		DirtyTransformState(false, true);
 
 	// Check for `animation' changes
-	if (changed_properties.Contains(PropertyId::Animation))
+	if (changed_properties.Contains(PropertyId::Animation) || changed_properties.Contains(PropertyId::AnimationName) ||
+		changed_properties.Contains(PropertyId::AnimationDuration) || changed_properties.Contains(PropertyId::AnimationDelay) ||
+		changed_properties.Contains(PropertyId::AnimationTimingFunction) || changed_properties.Contains(PropertyId::AnimationIterationCount) ||
+		changed_properties.Contains(PropertyId::AnimationDirection) || changed_properties.Contains(PropertyId::AnimationFillMode) ||
+		changed_properties.Contains(PropertyId::AnimationPlayState))
 	{
 		dirty_animation = true;
 	}
@@ -2587,7 +2633,7 @@ bool Element::AddAnimationKey(PropertyId id, const Property& target_value, float
 }
 
 ElementAnimationList::iterator Element::StartAnimation(PropertyId property_id, const Property* start_value, int num_iterations,
-	bool alternate_direction, float delay, bool initiated_by_animation_property)
+	bool alternate_direction, float delay, bool initiated_by_animation_property, bool reverse_direction, bool retain_final_value)
 {
 	auto it = std::find_if(animations.begin(), animations.end(), [&](const ElementAnimation& el) { return el.GetPropertyId() == property_id; });
 
@@ -2629,7 +2675,8 @@ ElementAnimationList::iterator Element::StartAnimation(PropertyId property_id, c
 	{
 		ElementAnimationOrigin origin = (initiated_by_animation_property ? ElementAnimationOrigin::Animation : ElementAnimationOrigin::User);
 		double start_time = Clock::GetElapsedTime() + (double)delay;
-		*it = ElementAnimation{property_id, origin, value, *this, start_time, 0.0f, num_iterations, alternate_direction};
+		*it = ElementAnimation{property_id, origin, value, *this, start_time, 0.0f, num_iterations, alternate_direction, reverse_direction,
+			retain_final_value};
 	}
 
 	if (!it->IsInitalized())
@@ -2756,7 +2803,52 @@ void Element::HandleAnimationProperty()
 	{
 		dirty_animation = false;
 
+		// Remove values retained by a previous CSS fill mode before rebuilding the animation list.
+		for (PropertyId id : retained_animation_properties)
+			RemoveProperty(id);
+		retained_animation_properties.clear();
+
 		const AnimationList* animation_list = meta->computed_values.animation();
+		AnimationList longhand_animation_list;
+
+		// CSS libraries such as Animate.css build an animation from independently cascading
+		// longhand declarations. Resolve variables first, then combine their comma-separated
+		// values into the internal shorthand representation.
+		if (const Property* name_property = meta->style.GetLocalPropertyWithResolvedVariables(PropertyId::AnimationName))
+		{
+			auto ReadLonghand = [&](PropertyId id, const char* default_value) {
+				if (const Property* property = meta->style.GetLocalPropertyWithResolvedVariables(id))
+					return SplitAnimationLonghand(property->Get<String>());
+				return StringList{default_value};
+			};
+
+			const StringList names = SplitAnimationLonghand(name_property->Get<String>());
+			const StringList durations = ReadLonghand(PropertyId::AnimationDuration, "0s");
+			const StringList delays = ReadLonghand(PropertyId::AnimationDelay, "0s");
+			const StringList tweens = ReadLonghand(PropertyId::AnimationTimingFunction, "ease");
+			const StringList iterations = ReadLonghand(PropertyId::AnimationIterationCount, "1");
+			const StringList directions = ReadLonghand(PropertyId::AnimationDirection, "normal");
+			const StringList fills = ReadLonghand(PropertyId::AnimationFillMode, "none");
+			const StringList play_states = ReadLonghand(PropertyId::AnimationPlayState, "running");
+			auto Repeated = [](const StringList& values, size_t index) -> const String& { return values[index % values.size()]; };
+
+			for (size_t i = 0; i < names.size(); ++i)
+			{
+				const String shorthand = names[i] + " " + Repeated(durations, i) + " " + Repeated(tweens, i) + " " + Repeated(delays, i) + " " +
+					Repeated(iterations, i) + " " + Repeated(directions, i) + " " + Repeated(fills, i) + " " + Repeated(play_states, i);
+				PropertyDictionary parsed;
+				if (StyleSheetSpecification::ParsePropertyDeclaration(parsed, "animation", shorthand))
+				{
+					if (const Property* property = parsed.GetProperty(PropertyId::Animation))
+					{
+						const AnimationList& parsed_list = property->value.GetReference<AnimationList>();
+						longhand_animation_list.insert(longhand_animation_list.end(), parsed_list.begin(), parsed_list.end());
+					}
+				}
+			}
+
+			animation_list = &longhand_animation_list;
+		}
 		bool element_has_animations = ((animation_list && !animation_list->empty()) || !animations.empty());
 		const StyleSheet* stylesheet = nullptr;
 
@@ -2807,13 +2899,18 @@ void Element::HandleAnimationProperty()
 
 						const bool has_from_key = (blocks.front().normalized_time == 0);
 						const bool has_to_key = (blocks.back().normalized_time == 1);
+						const bool fill_backwards =
+							(animation.fill_mode == AnimationFillMode::Backwards || animation.fill_mode == AnimationFillMode::Both);
+						const bool fill_forwards =
+							(animation.fill_mode == AnimationFillMode::Forwards || animation.fill_mode == AnimationFillMode::Both);
 
 						// If the first key defines initial conditions for a given property, use those values, else, use this element's current
 						// values.
 						for (PropertyId id : property_ids)
 						{
 							const Property* property = ResolveProperty(id, (has_from_key ? blocks.front().properties.GetProperty(id) : nullptr), 0);
-							StartAnimation(id, property, animation.num_iterations, animation.alternate, animation.delay, true);
+							StartAnimation(id, property, animation.num_iterations, animation.alternate, animation.delay, true, animation.reverse,
+								fill_forwards);
 						}
 
 						// Add middle keys: Need to skip the first and last keys if they set the initial and end conditions, respectively.
@@ -2824,7 +2921,8 @@ void Element::HandleAnimationProperty()
 							for (const auto& [id, unresolved_property] : blocks[i].properties.GetProperties())
 							{
 								const Property* property = ResolveProperty(id, &unresolved_property, i);
-								AddAnimationKeyTime(id, property, time, animation.tween);
+								const Tween key_tween = (i > 0 && blocks[i - 1].has_tween) ? blocks[i - 1].tween : animation.tween;
+								AddAnimationKeyTime(id, property, time, key_tween);
 							}
 						}
 
@@ -2834,7 +2932,22 @@ void Element::HandleAnimationProperty()
 						{
 							const Property* property =
 								ResolveProperty(id, (has_to_key ? blocks.back().properties.GetProperty(id) : nullptr), (int)blocks.size() - 1);
-							AddAnimationKeyTime(id, property, time, animation.tween);
+							const int previous_index = Math::Max(0, (int)blocks.size() - 2);
+							const Tween key_tween = blocks[previous_index].has_tween ? blocks[previous_index].tween : animation.tween;
+							AddAnimationKeyTime(id, property, time, key_tween);
+						}
+
+						if (fill_backwards)
+						{
+							const int block_index = animation.reverse ? (int)blocks.size() - 1 : 0;
+							for (PropertyId id : property_ids)
+							{
+								const bool has_boundary_key = animation.reverse ? has_to_key : has_from_key;
+								const Property* property =
+									ResolveProperty(id, has_boundary_key ? blocks[block_index].properties.GetProperty(id) : nullptr, block_index);
+								if (property)
+									SetProperty(id, *property);
+							}
 						}
 					}
 				}
@@ -2876,7 +2989,12 @@ void Element::AdvanceAnimations()
 			// Remove completed transition- and animation-initiated properties.
 			// Should behave like in HandleTransitionProperty() and HandleAnimationProperty() respectively.
 			if (it->GetOrigin() != ElementAnimationOrigin::User)
-				RemoveProperty(it->GetPropertyId());
+			{
+				if (it->RetainsFinalValue())
+					retained_animation_properties.push_back(it->GetPropertyId());
+				else
+					RemoveProperty(it->GetPropertyId());
+			}
 		}
 
 		// Need to erase elements before submitting event, as iterators might be invalidated when calling external code.

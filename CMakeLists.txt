@@ -80,13 +80,12 @@ option(RMLUI_COMPILER_OPTIONS "Enable recommended compiler-specific options for 
 option(RMLUI_WARNINGS_AS_ERRORS "Treat compiler warnings as errors." OFF)
 mark_as_advanced(RMLUI_WARNINGS_AS_ERRORS)
 
-option(RMLUI_TRACY_PROFILING "Enable profiling with Tracy. Source files can optionally be placed in `Dependencies/tracy`." OFF)
-if(RMLUI_TRACY_PROFILING)
-	option(RMLUI_TRACY_MEMORY_PROFILING "Overload global operator new/delete to track memory allocations in Tracy." ON)
-endif()
-if(RMLUI_TRACY_PROFILING AND CMAKE_CONFIGURATION_TYPES)
-	option(RMLUI_TRACY_CONFIGURATION "Enable a separate Tracy configuration type for multi-config generators such as Visual Studio, otherwise enable Tracy in all configurations." ON)
-endif()
+# KinuUI ships with profiling in the regular build configurations. Tracy is
+# configured on-demand, so the instrumentation remains dormant until a
+# profiler connects. Allocation ownership is provided by mimalloc below.
+set(RMLUI_TRACY_PROFILING ON CACHE BOOL "Enable profiling with the bundled Tracy client." FORCE)
+set(RMLUI_TRACY_MEMORY_PROFILING OFF CACHE BOOL "Use mimalloc instead of Tracy's global new/delete override." FORCE)
+set(RMLUI_TRACY_CONFIGURATION OFF CACHE BOOL "Instrument the regular build configurations." FORCE)
 
 option(RMLUI_CUSTOM_CONFIGURATION "Customize the RmlUi configuration file to override the default configuration and types." OFF)
 set(RMLUI_CUSTOM_CONFIGURATION_FILE "" CACHE STRING "Custom configuration file to be included in place of <RmlUi/Config/Config.h>.")
@@ -117,6 +116,15 @@ endif()
 
 include("CMake/Utilities.cmake")
 include("CMake/Dependencies.cmake")
+
+# Keep the mandatory KinuUI runtime dependencies in the same export set as
+# rmlui_core so static-library consumers receive a complete link interface.
+install(TARGETS mimalloc-static
+	EXPORT RmlUiTargets
+	ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
 
 include("CMake/RuntimeUtilities.cmake")
 setup_binary_output_directories()

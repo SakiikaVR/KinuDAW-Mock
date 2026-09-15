@@ -27,14 +27,17 @@ static int ConvertFixed16_16ToInt(int32_t fx)
 }
 
 #ifdef RMLUI_DEBUG
-#define FT_ERROR_START_LIST     switch ( error_code ) {
-#define FT_ERRORDEF( e, v, s )    case v: return s;
-#define FT_ERROR_END_LIST       }
+	#define FT_ERROR_START_LIST \
+		switch (error_code)     \
+		{
+	#define FT_ERRORDEF(e, v, s) \
+	case v: return s;
+	#define FT_ERROR_END_LIST }
 // https://freetype.org/freetype2/docs/reference/ft2-error_enumerations.html
 static const char* GetFreeTypeErrorString(FT_Error error_code)
 {
-#undef FTERRORS_H_
-#include "freetype/fterrors.h"
+	#undef FTERRORS_H_
+	#include "freetype/fterrors.h"
 	return "";
 }
 #endif
@@ -301,8 +304,8 @@ static bool BuildGlyph(FT_Face ft_face, const Character character, FontGlyphMap&
 		Rml::Log::Message(Rml::Log::LT_WARNING, "Unable to load glyph at index '%u' in font face '%s %s'; FreeType error 0x%x: %s.",
 			(unsigned int)index, ft_face->family_name, ft_face->style_name, error, error_message);
 #else
-		Rml::Log::Message(Rml::Log::LT_WARNING, "Unable to load glyph at index '%u' in font face '%s %s'; FreeType error 0x%x.",
-			(unsigned int)index, ft_face->family_name, ft_face->style_name, error);
+		Rml::Log::Message(Rml::Log::LT_WARNING, "Unable to load glyph at index '%u' in font face '%s %s'; FreeType error 0x%x.", (unsigned int)index,
+			ft_face->family_name, ft_face->style_name, error);
 #endif
 	}
 

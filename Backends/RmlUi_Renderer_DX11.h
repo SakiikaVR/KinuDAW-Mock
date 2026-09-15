@@ -22,7 +22,7 @@
 
 // Allow the user to override the number of MSAA samples
 #ifndef NUM_MSAA_SAMPLES
-	#define NUM_MSAA_SAMPLES 2
+	#define NUM_MSAA_SAMPLES 4
 #endif
 
 enum class ProgramId;

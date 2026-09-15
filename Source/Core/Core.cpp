@@ -20,6 +20,7 @@
 #include "EventSpecification.h"
 #include "FileInterfaceDefault.h"
 #include "Layout/LayoutPools.h"
+#include "KinuMemory.h"
 #include "PluginRegistry.h"
 #include "RenderManagerAccess.h"
 #include "StyleSheetFactory.h"
@@ -83,6 +84,7 @@ static void ReleaseMemoryPools()
 bool Initialise()
 {
 	RMLUI_ASSERTMSG(!initialised, "Rml::Initialise() called, but RmlUi is already initialised!");
+	RMLUI_ASSERT(Detail::GetKinuMemoryAllocatorVersion() > 0);
 
 	InitializeMemoryPools();
 	InitializeComputeProperty();

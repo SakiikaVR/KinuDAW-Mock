@@ -623,9 +623,9 @@ static void PrepareFilter(AnimationKey& key)
 }
 
 ElementAnimation::ElementAnimation(PropertyId property_id, ElementAnimationOrigin origin, const Property& current_value, Element& element,
-	double start_world_time, float duration, int num_iterations, bool alternate_direction) :
+	double start_world_time, float duration, int num_iterations, bool alternate_direction, bool reverse_direction, bool retain_final_value) :
 	property_id(property_id), duration(duration), num_iterations(num_iterations), alternate_direction(alternate_direction),
-	last_update_world_time(start_world_time), origin(origin)
+	retain_final_value(retain_final_value), last_update_world_time(start_world_time), reverse_direction(reverse_direction), origin(origin)
 {
 	if (!current_value.definition)
 	{

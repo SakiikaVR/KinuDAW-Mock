@@ -1337,6 +1337,14 @@ void ElementStyle::ComputeValue(Style::ComputedValues& values, float dp_ratio, V
 	case PropertyId::Cursor:
 	case PropertyId::Transition:
 	case PropertyId::Animation:
+	case PropertyId::AnimationName:
+	case PropertyId::AnimationDuration:
+	case PropertyId::AnimationDelay:
+	case PropertyId::AnimationTimingFunction:
+	case PropertyId::AnimationIterationCount:
+	case PropertyId::AnimationDirection:
+	case PropertyId::AnimationFillMode:
+	case PropertyId::AnimationPlayState:
 	case PropertyId::AlignContent:
 	case PropertyId::AlignItems:
 	case PropertyId::AlignSelf:

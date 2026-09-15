@@ -26,6 +26,7 @@ private:
 	float duration = 0;               // for a single iteration
 	int num_iterations = 0;           // -1 for infinity
 	bool alternate_direction = false; // between iterations
+	bool retain_final_value = false;
 
 	Vector<AnimationKey> keys;
 
@@ -44,7 +45,7 @@ private:
 public:
 	ElementAnimation() {}
 	ElementAnimation(PropertyId property_id, ElementAnimationOrigin origin, const Property& current_value, Element& element, double start_world_time,
-		float duration, int num_iterations, bool alternate_direction);
+		float duration, int num_iterations, bool alternate_direction, bool reverse_direction = false, bool retain_final_value = false);
 
 	bool AddKey(float target_time, const Property& property, Element& element, Tween tween, bool extend_duration);
 
@@ -54,6 +55,7 @@ public:
 	float GetDuration() const { return duration; }
 	bool IsComplete() const { return animation_complete; }
 	bool IsTransition() const { return origin == ElementAnimationOrigin::Transition; }
+	bool RetainsFinalValue() const { return retain_final_value; }
 	bool IsInitalized() const { return !keys.empty(); }
 	float GetInterpolationFactor() const { return GetInterpolationFactorAndKeys(nullptr, nullptr); }
 	ElementAnimationOrigin GetOrigin() const { return origin; }

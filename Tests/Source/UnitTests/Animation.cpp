@@ -9,6 +9,104 @@
 
 using namespace Rml;
 
+static const String document_css_compatible_animation_rml = R"(
+<rml>
+<head>
+	<title>CSS compatible animation shorthand</title>
+	<link type="text/rcss" href="/assets/rml.rcss"/>
+	<style>
+		body { left: 0; top: 0; right: 0; bottom: 0; }
+		@keyframes popup { from { opacity: 0; } to { opacity: 1; } }
+		#target { opacity: 0.25; }
+		#target.running { animation: popup 100ms cubic-bezier(0.87, 0.05, 0.02, 0.97) 100ms both; }
+	</style>
+</head>
+<body><div id="target" class="running"/></body>
+</rml>
+)";
+
+TEST_CASE("animation.css_compatible_shorthand")
+{
+	TestsSystemInterface* system_interface = TestsShell::GetTestsSystemInterface();
+	Context* context = TestsShell::GetContext();
+	system_interface->SetManualTime(0.0);
+	ElementDocument* document = context->LoadDocumentFromMemory(document_css_compatible_animation_rml, "assets/");
+	REQUIRE(document);
+	Element* element = document->GetElementById("target");
+	document->Show();
+	context->Update();
+	// `backwards` (through `both`) applies the first key while waiting for the delay.
+	CHECK(element->GetProperty<float>("opacity") == doctest::Approx(0.f));
+	for (double time : {0.05, 0.10, 0.15, 0.20, 0.25})
+	{
+		system_interface->SetManualTime(time);
+		context->Update();
+	}
+	// `forwards` retains the final key after completion.
+	CHECK(element->GetProperty<float>("opacity") == doctest::Approx(1.f));
+
+	// Removing the animation rule releases its filled value back to the authored base declaration.
+	element->SetClass("running", false);
+	context->Update();
+	CHECK(element->GetProperty<float>("opacity") == doctest::Approx(0.25f));
+
+	document->Close();
+	TestsShell::ShutdownShell();
+}
+
+TEST_CASE("animation.animate_css_longhands")
+{
+	static const String document_rml = R"(
+<rml>
+<head>
+	<link type="text/rcss" href="/assets/rml.rcss"/>
+	<style>
+		body { --animate-duration: 100ms; --animate-delay: 25ms; inset: 0; }
+		@keyframes animateCssPulse {
+			from { opacity: 0; animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1); }
+			50% { opacity: 0.5; animation-timing-function: ease-in-out; }
+			to { opacity: 1; }
+		}
+		.animate__animated {
+			animation-duration: var(--animate-duration);
+			animation-delay: calc(var(--animate-delay) * 2);
+			animation-fill-mode: both;
+			animation-iteration-count: calc(1 * 2);
+		}
+		.animate__pulse { animation-name: animateCssPulse; }
+	</style>
+</head>
+<body><div id="target" class="animate__animated animate__pulse"/></body>
+</rml>
+)";
+
+	TestsSystemInterface* system_interface = TestsShell::GetTestsSystemInterface();
+	Context* context = TestsShell::GetContext();
+	system_interface->SetManualTime(0.0);
+	ElementDocument* document = context->LoadDocumentFromMemory(document_rml, "assets/");
+	REQUIRE(document);
+	Element* element = document->GetElementById("target");
+	document->Show();
+	context->Update();
+	REQUIRE(element->GetProperty("animation-name"));
+	CHECK(element->GetProperty<String>("animation-name") == "animateCssPulse");
+	CHECK(element->GetProperty<String>("animation-duration") == "100ms");
+	CHECK(element->GetProperty<String>("animation-delay") == "calc(25ms * 2)");
+
+	// Backwards fill is active during the calculated 50 ms delay.
+	CHECK(element->GetProperty<float>("opacity") == doctest::Approx(0.f));
+	for (double time : {0.05, 0.10, 0.15, 0.20, 0.25, 0.30})
+	{
+		system_interface->SetManualTime(time);
+		context->Update();
+	}
+	// Two iterations have completed and `both` retains the final value.
+	CHECK(element->GetProperty<float>("opacity") == doctest::Approx(1.f));
+
+	document->Close();
+	TestsShell::ShutdownShell();
+}
+
 static const String document_decorator_rml = R"(
 <rml>
 <head>

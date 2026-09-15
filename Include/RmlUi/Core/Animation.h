@@ -6,13 +6,17 @@
 
 namespace Rml {
 
+enum class AnimationFillMode : uint8_t { None, Forwards, Backwards, Both };
+
 /* Data parsed from the 'animation' property. */
 struct Animation {
 	float duration = 0.0f;
 	Tween tween;
 	float delay = 0.0f;
 	bool alternate = false;
+	bool reverse = false;
 	bool paused = false;
+	AnimationFillMode fill_mode = AnimationFillMode::None;
 	int num_iterations = 1;
 	String name;
 };
@@ -37,8 +41,8 @@ struct TransitionList {
 
 inline bool operator==(const Animation& a, const Animation& b)
 {
-	return a.duration == b.duration && a.tween == b.tween && a.delay == b.delay && a.alternate == b.alternate && a.paused == b.paused &&
-		a.num_iterations == b.num_iterations && a.name == b.name;
+	return a.duration == b.duration && a.tween == b.tween && a.delay == b.delay && a.alternate == b.alternate && a.reverse == b.reverse &&
+		a.paused == b.paused && a.fill_mode == b.fill_mode && a.num_iterations == b.num_iterations && a.name == b.name;
 }
 inline bool operator!=(const Animation& a, const Animation& b)
 {

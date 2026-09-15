@@ -51,7 +51,7 @@ bool Backend::Initialize(const char* name, int width, int height, bool allow_res
 	glfwWindowHint(GLFW_STENCIL_BITS, 8);
 
 	// Enable MSAA for better-looking visuals, especially when transforms are applied.
-	glfwWindowHint(GLFW_SAMPLES, 2);
+	glfwWindowHint(GLFW_SAMPLES, 4);
 
 	// Apply window properties and create it.
 	glfwWindowHint(GLFW_RESIZABLE, allow_resize ? GLFW_TRUE : GLFW_FALSE);

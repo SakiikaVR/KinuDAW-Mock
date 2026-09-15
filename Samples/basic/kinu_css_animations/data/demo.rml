@@ -1,0 +1,44 @@
+<rml>
+<head>
+	<title>KinuUI CSS Animations</title>
+	<link type="text/rcss" href="../../../assets/rml.rcss"/>
+	<link type="text/rcss" href="demo.rcss"/>
+</head>
+<body>
+	<div id="app">
+		<header>
+			<div class="brand"><span class="brand-mark"><b>K</b></span><div><strong>KinuUI</strong><small>CSS MOTION LAB</small></div></div>
+			<div class="compat"><i></i><span id="status">LIVE</span><em>ANIMATE.CSS 4.1.1</em></div>
+			<button onclick="pause"><span id="pause-label">FREEZE</span></button>
+			<button class="primary" onclick="replay"><span>REPLAY</span></button>
+			<button class="close" onclick="exit"><span>X</span></button>
+		</header>
+
+		<main id="scene" class="running">
+			<section class="intro">
+				<p class="eyebrow">BROWSER-LIKE MOTION - NATIVE C++ UI</p>
+				<h1><span>CSS motion,</span><b>without the browser.</b></h1>
+				<p class="lead">KinuUI reads animation shorthand plus Animate.css-style longhands, variables, calc, transforms, and fill modes.</p>
+				<div class="syntax"><code>animation-duration: var(--animate-duration);</code></div>
+			</section>
+
+			<section class="gallery">
+				<div class="card card-orbit">
+					<div class="card-top"><span>01</span><b>ORBIT</b><em>infinite alternate</em></div>
+					<div class="orbit-stage"><div class="orbit-ring"></div><div class="orbit-dot"></div><div class="orbit-core"><b>K</b></div></div>
+				</div>
+				<div class="card card-bars">
+					<div class="card-top"><span>02</span><b>STAGGER</b><em>delay + both</em></div>
+					<div class="bars"><i class="bar-a"></i><i class="bar-b"></i><i class="bar-c"></i><i class="bar-d"></i><i class="bar-e"></i></div>
+				</div>
+				<div class="card card-pulse animate__animated animate__pulse">
+					<div class="card-top"><span>03</span><b>ANIMATE.CSS</b><em>longhands + var</em></div>
+					<div class="pulse-stage"><div class="pulse-halo halo-a"></div><div class="pulse-halo halo-b"></div><div class="pulse-core"><span></span></div></div>
+				</div>
+			</section>
+		</main>
+
+		<footer><span>ANIMATE.CSS COMPATIBILITY</span><b>SPACE: DEBUGGER</b><em>KinuUI compatibility fork</em></footer>
+	</div>
+</body>
+</rml>

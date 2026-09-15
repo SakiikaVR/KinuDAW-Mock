@@ -13,6 +13,7 @@
 #include "../../Include/RmlUi/Core/SystemInterface.h"
 #include "ComputeProperty.h"
 #include "ControlledLifetimeResource.h"
+#include "PropertyParserAnimation.h"
 #include "StyleSheetFactory.h"
 #include "StyleSheetNode.h"
 #include <algorithm>
@@ -391,6 +392,11 @@ static void PostprocessKeyframes(KeyframesMap& keyframes_map)
 			property_ids.reserve(blocks.size() * blocks[0].properties.GetNumProperties());
 		for (auto& block : blocks)
 		{
+			if (const Property* timing = block.properties.GetProperty(PropertyId::AnimationTimingFunction))
+			{
+				block.has_tween = PropertyParserAnimation::ParseTweenValue(timing->Get<String>(), block.tween);
+				block.properties.RemoveProperty(PropertyId::AnimationTimingFunction);
+			}
 			for (auto& property : block.properties.GetProperties())
 				property_ids.push_back(property.first);
 		}
