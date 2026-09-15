@@ -1,0 +1,29 @@
+* { box-sizing: border-box; font-family: LINESeedJP; font-weight: bold; }
+body { width: 100%; height: 100%; margin: 0; overflow: hidden; color: #dce5ea; background: #0b0f15; font-size: 11dp; }
+button { display: block; padding: 0; border: 1dp #354250; color: #9aabb7; background: #17202b; text-align: center; }
+button:hover { color: #edf8fa; background: #263747; }
+#instrument-app { display: flex; flex-direction: column; width: 100%; height: 100%; }
+header { display: flex; flex: 0 0 40dp; align-items: center; padding: 0 16dp; border-bottom: 1dp #303c48; }
+header b { font-size: 13dp; }header span { margin-left: auto; color: #6ac9a3; font-size: 9dp; }
+.instrument-search-box { display: flex; flex: 0 0 54dp; align-items: center; padding: 10dp 16dp; }
+.instrument-search-box label { width: 42dp; color: #879baa; }
+#instrument-search { display: block; flex: 1 1 0; width: 0; min-width: 0; height: 32dp; padding: 0 10dp; line-height: 30dp; border: 1dp #3f5365; border-radius: 4dp; color: #e4eff4; background: #121a23; font-size: 11dp; }
+.instrument-help { flex: 0 0 26dp; height: 26dp; padding-left: 16dp; color: #758b9a; font-size: 9dp; }
+main { flex: 1 1 0; height: 0; min-height: 0; margin: 0 16dp 12dp; overflow-x: hidden; overflow-y: auto; }
+.instrument-row { display: flex; height: 52dp; align-items: center; margin-bottom: 6dp; padding: 0 8dp; border: 1dp #29394a; border-radius: 4dp; background: #111923; }
+.instrument-row.selected { border-color: #74e0cf; background: #182e30; }
+.instrument-pick { display: block; flex: 1 1 0; min-width: 0; height: 48dp; padding-left: 6dp; border: 0; background: transparent; text-align: left; }
+.instrument-pick b { display: block; line-height: 22dp; font-size: 12dp; }
+.instrument-pick small { display: block; color: #748b9c; font-size: 9dp; line-height: 17dp; }
+.vst-tag { width: 43dp; color: #7892a5; font-size: 9dp; }
+.instrument-heart { width: 32dp; height: 32dp; line-height: 30dp; font-size: 18dp; border: 0; background: transparent; }
+.instrument-heart.favorite { color: #f09fbb; }
+#instrument-empty { display: none; text-align: center; color: #8397a6; margin-top: 20dp; }
+footer { display: flex; flex: 0 0 66dp; height: 66dp; align-items: center; padding: 0 16dp; border-top: 1dp #303c48; }
+footer > div { flex: 1 1 0; min-width: 0; }footer b, footer small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+footer small { font-size: 8dp; color: #667d8c; margin-top: 5dp; }
+footer button { width: 90dp; height: 32dp; margin-left: 8dp; line-height: 30dp; font-size: 10dp; border-radius: 4dp; }
+#instrument-add { width: 112dp; }#instrument-add.ready { color: #a3eee0; border-color: #4b998c; background: #18332f; }
+scrollbarvertical { width: 12dp; background: #121b24; }scrollbarvertical sliderbar { width: 10dp; min-height: 24dp; background: #40596c; border-radius: 3dp; }
+scrollbarvertical slidertrack { width: 12dp; }scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc { height: 0; }
+@media (max-width: 520dp) { footer > div { display: none; }footer button { margin-left: auto; } }
