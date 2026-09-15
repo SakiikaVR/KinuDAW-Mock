@@ -2,11 +2,11 @@
 
 Windows向けネイティブDAWです。KinuUI/RmlUiのタイムラインに実音声エンジン、WASAPI録音・再生、MIDI編集・入力、VST3ホスト、プロジェクト保存、WAV書き出しを接続しました。アプリケーションの実装はMITライセンスです。
 
-**v0.3.0は実処理を備えた開発版です。** 基本的な制作機能を動作確認していますが、市販DAWと同等の機能・全プラグインの全プリセットでの互換性を保証するものではありません。未対応機能と検証範囲を下記に記載しています。
+**v0.3.1は実処理を備えた開発版です。** 基本的な制作機能を動作確認していますが、市販DAWと同等の機能・全プラグインの全プリセットでの互換性を保証するものではありません。未対応機能と検証範囲を下記に記載しています。
 
 ## 起動
 
-1. [Windows x64開発版](https://github.com/SakiikaVR/KinuDAW-Mock/releases/tag/v0.3.0)のZIPを全体展開します。
+1. [Windows x64開発版](https://github.com/SakiikaVR/KinuDAW-Mock/releases/tag/v0.3.1)のZIPを全体展開します。
 2. `KinuDAW/KinuDAW.exe`を起動します。`Samples`、`Tools`、`kinu_vst_worker.exe`は隣に置いたままにします。
 3. 初回はインストール済みVST3をバックグラウンド検出します。追加したプラグインは「VST3再検出」で更新します。
 

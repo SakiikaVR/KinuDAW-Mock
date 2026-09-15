@@ -1,5 +1,5 @@
 # Copyright (c) 2026 KinuDAW contributors. MIT License.
-param([string]$Bin="$PSScriptRoot\..\build-daw\Release",[string]$Version='0.3.0')
+param([string]$Bin="$PSScriptRoot\..\build-daw\Release",[string]$Version='0.3.1')
 $ErrorActionPreference='Stop'
 if($Version -notmatch '^\d+\.\d+\.\d+([-.][a-zA-Z0-9.-]+)?$') { throw 'Invalid package version' }
 $root=(Resolve-Path -LiteralPath "$PSScriptRoot\..").Path

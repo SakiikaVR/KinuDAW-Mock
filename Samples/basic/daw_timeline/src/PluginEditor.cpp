@@ -134,8 +134,12 @@ void PluginEditor::layoutSurface() {
     int clipWidth=std::min(rect.getWidth(),int(area->GetClientWidth())),clipHeight=std::min(rect.getHeight(),int(area->GetClientHeight()));
     if(clipWidth!=clipWidth_ || clipHeight!=clipHeight_) { auto region=CreateRectRgn(0,0,clipWidth,clipHeight); if(!SetWindowRgn(surface_,region,TRUE)) DeleteObject(region); clipWidth_=clipWidth; clipHeight_=clipHeight; }
     auto foreground=GetForegroundWindow();
+    bool topmost=(GetWindowLongW(window_,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;
+    bool surfaceTopmost=(GetWindowLongW(surface_,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;
+    if(topmost!=surfaceTopmost)
+        SetWindowPos(surface_,topmost?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
     if(foreground==window_ || foreground==surface_ || IsChild(surface_,foreground))
-        SetWindowPos(surface_,(GetWindowLongW(window_,GWL_EXSTYLE)&WS_EX_TOPMOST)?HWND_TOPMOST:HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+        SetWindowPos(surface_,topmost?HWND_TOPMOST:HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 }
 void PluginEditor::update() {
     if(tab_==2) for(size_t i=0;i<ids_.size();++i) { double value=plugin_.controller_->getParamNormalized(ids_[i]); if(!std::isfinite(value)) continue; value=std::clamp(value,0.,1.); if(std::abs(values_[i]-value)<.00001) continue; values_[i]=value;
