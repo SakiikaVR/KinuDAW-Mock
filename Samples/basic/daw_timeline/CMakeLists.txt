@@ -14,7 +14,7 @@ target_include_directories(kinu_audio PUBLIC src "${PROJECT_SOURCE_DIR}/Dependen
 target_compile_features(kinu_audio PUBLIC cxx_std_17)
 target_compile_definitions(kinu_audio PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(kinu_audio PUBLIC ole32 winmm avrt)
-add_executable(kinu_vst_worker src/VstWorker.cpp src/VstHost.cpp
+add_executable(kinu_vst_worker src/VstWorker.cpp src/VstHost.cpp src/PluginEditor.cpp
   "${PROJECT_SOURCE_DIR}/Dependencies/vst3sdk/public.sdk/source/vst/hosting/module_win32.cpp"
   "${PROJECT_SOURCE_DIR}/Dependencies/vst3sdk/public.sdk/source/vst/hosting/plugprovider.cpp"
   "${PROJECT_SOURCE_DIR}/Dependencies/vst3sdk/public.sdk/source/vst/hosting/connectionproxy.cpp"
@@ -22,15 +22,23 @@ add_executable(kinu_vst_worker src/VstWorker.cpp src/VstHost.cpp
 target_include_directories(kinu_vst_worker PRIVATE src "${PROJECT_SOURCE_DIR}/Dependencies/audio")
 target_compile_features(kinu_vst_worker PRIVATE cxx_std_17)
 target_compile_definitions(kinu_vst_worker PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(kinu_vst_worker PRIVATE sdk_hosting ole32 shell32)
+target_link_libraries(kinu_vst_worker PRIVATE sdk_hosting ole32 shell32 dwmapi rmlui_shell)
+set_common_target_options(kinu_vst_worker)
 add_executable(${TARGET_NAME} WIN32 src/main.cpp)
 target_link_libraries(${TARGET_NAME} PRIVATE kinu_audio comdlg32)
 add_dependencies(${TARGET_NAME} kinu_vst_worker)
 add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/Tools" "$<TARGET_FILE_DIR:${TARGET_NAME}>/Tools")
 add_executable(kinu_audio_tests src/AudioTests.cpp)
+set(SMTG_RUN_VST_VALIDATOR OFF)
+set(SMTG_CREATE_PLUGIN_LINK OFF)
+smtg_add_vst3plugin(kinu_test_delay src/TestDelayPlugin.cpp)
+target_link_libraries(kinu_test_delay PRIVATE sdk)
+target_compile_features(kinu_test_delay PRIVATE cxx_std_17)
+target_compile_definitions(kinu_test_delay PRIVATE NOMINMAX)
+target_compile_definitions(kinu_audio_tests PRIVATE KINU_TEST_PLUGIN_PATH="$<TARGET_FILE:kinu_test_delay>")
 target_link_libraries(kinu_audio_tests PRIVATE kinu_audio)
-add_dependencies(kinu_audio_tests kinu_vst_worker)
+add_dependencies(kinu_audio_tests kinu_vst_worker kinu_test_delay)
 set_common_target_options(${TARGET_NAME})
 target_link_libraries(${TARGET_NAME} PRIVATE rmlui_shell)
 if(MSVC)

@@ -9,6 +9,9 @@ struct MixerRack { std::vector<MixerEffect> effects; int next_type = 0; float sc
 MixerRack mixer_racks[kMaxTracks]; // Stable track IDs, independent of strip order/name.
 int mixer_next_effect_id = 0;
 const char* mixer_effect_names[] = {"EQ", "Compressor", "Reverb"};
+struct MixerPlugin { std::string name; bool healthy=false,bypass=false; unsigned latency=0; };
+std::array<std::array<MixerPlugin,4>,kMaxTracks> mixer_plugins;
+std::string mixer_rack_markup;
 
 void AppendMixerEffect(const MixerEffect& effect)
 {
@@ -30,16 +33,20 @@ void ShowMixerRack()
 {
     UpdateMixerRackLabel();
     auto* add=document->QuerySelector(".add-effect");
-    if(mixer_selected_channel==5 || track_automation[mixer_selected_channel]) { Get("mixer-effects")->SetInnerRML(""); Get("effects-empty")->SetInnerRML("Master output / FX are available on audio and instrument tracks"); Get("effects-empty")->SetProperty("display","block"); if(add) add->SetAttribute("disabled",true); return; }
+    if(track_automation[mixer_selected_channel]) { Get("mixer-effects")->SetInnerRML(""); mixer_rack_markup.clear(); Get("effects-empty")->SetInnerRML("Volume automation track"); Get("effects-empty")->SetProperty("display","block"); if(add) add->SetAttribute("disabled",true); return; }
     if(add) add->RemoveAttribute("disabled");
     std::string markup;
     LONG flags=shared_volume?InterlockedCompareExchange(shared_volume+kFxStateBase+mixer_selected_channel,0,0):0;
-    for(int i=0;i<3;++i) markup+=Rml::CreateString("<div class=\"effect-row\"><button class=\"effect-toggle%s\" onclick=\"mixer-builtin:%d\">%s</button><b>%s</b></div>",flags&(1<<i)?" active":"",i,flags&(1<<i)?"ON":"OFF",mixer_effect_names[i]);
-    Get("mixer-effects")->SetInnerRML(markup);
-    Get("effects-empty")->SetProperty("display","none");
+    for(int s=0;s<4;++s) { const auto& p=mixer_plugins[mixer_selected_channel][s]; if(p.name.empty()) continue;
+        std::string label=Rml::StringUtilities::EncodeRml(p.name);
+        markup+=Rml::CreateString("<div class=\"effect-row vst-effect-row\" id=\"rack-vst-%d\"><button class=\"effect-toggle%s\" onclick=\"mixer-vst-bypass:%d\">%s</button><button class=\"vst-editor-button\" onclick=\"mixer-vst-edit:%d\" title=\"%s\"><b>%s</b><small>%s / %u samples</small></button><button class=\"effect-remove\" onclick=\"mixer-vst-remove:%d\">X</button></div>",s,p.bypass?"":" active",s,p.bypass?"OFF":"ON",s,label.c_str(),label.c_str(),p.healthy?"VST3":"Worker failed",p.latency,s);
+    }
+    if(mixer_selected_channel!=5) for(int i=0;i<3;++i) markup+=Rml::CreateString("<div class=\"effect-row\"><button class=\"effect-toggle%s\" onclick=\"mixer-builtin:%d\">%s</button><b>%s</b></div>",flags&(1<<i)?" active":"",i,flags&(1<<i)?"ON":"OFF",mixer_effect_names[i]);
+    if(markup!=mixer_rack_markup) { float scroll=Get("rack-scroll")->GetScrollTop(); Get("mixer-effects")->SetInnerRML(markup); Get("rack-scroll")->SetScrollTop(scroll); mixer_rack_markup=markup; }
+    Get("effects-empty")->SetInnerRML("VST3 effects: use the add button below"); Get("effects-empty")->SetProperty("display",markup.empty()?"block":"none");
 }
 void AddMixerEffect() {
-    if(mixer_selected_channel==5 || track_automation[mixer_selected_channel]) return;
+    if(track_automation[mixer_selected_channel]) return;
     if(shared_volume) InterlockedExchange(shared_volume+kMixerVstRequest,mixer_selected_channel+1);
 }
 void RemoveMixerEffect(Rml::Element*) {}
@@ -90,9 +97,14 @@ void PublishMixerTracks()
 	for (int row = 0; row < track_count; ++row)
 	{
 		const int track = track_order[row];
-		data << track << ' ' << track_color_presets[track] << ' ' << std::quoted(track_names[track]) << ' ' << track_audio[track] << ' ' << track_automation[track] << '\n';
+		data << track << ' ' << track_color_presets[track] << ' ' << std::quoted(track_names[track]) << ' ' << track_audio[track] << ' ' << track_automation[track];
+        for(int s=0;s<4;++s) {
+            const auto* info=audio_engine?audio_engine->pluginInfo(track,s):nullptr;
+            data << ' ' << std::quoted(info?info->name:"") << ' ' << (audio_engine && audio_engine->pluginHealthy(track,s)) << ' ' << (audio_engine && audio_engine->pluginBypassed(track,s)) << ' ' << (audio_engine?audio_engine->pluginLatency(track,s):0);
+        } data << '\n';
 	}
-	const std::string value = data.str();
+    data << PluginSessionMetadata() << '\n';
+    const std::string value = data.str();
 	if (value == mixer_metadata) return;
 	try
 	{
@@ -160,14 +172,17 @@ void ReadMixerTracks()
 		int count = 0;
 		if (!(data >> count) || count < 6 || count > kMaxTracks) return;
 		int order[kMaxTracks], presets[kMaxTracks]; std::string names[kMaxTracks]; bool seen[kMaxTracks] = {}, audio[kMaxTracks] = {}, automation[kMaxTracks] = {};
+        std::array<std::array<MixerPlugin,4>,kMaxTracks> plugins;
 		for (int row = 0; row < count; ++row)
 		{
 			if (!(data >> order[row] >> presets[row] >> std::quoted(names[row]) >> audio[row] >> automation[row])) return;
 			if (order[row] < 0 || order[row] >= count || seen[order[row]] || presets[row] < 0 || presets[row] >= 9 || names[row].size() > 256) return;
 			seen[order[row]] = true;
+            for(int s=0;s<4;++s) { auto& p=plugins[order[row]][s]; if(!(data>>std::quoted(p.name)>>p.healthy>>p.bypass>>p.latency) || p.name.size()>1024) return; }
 		}
 		if (order[0] != 5) return;
 		track_count = count;
+        mixer_plugins=std::move(plugins);
 		for (int row = 0; row < track_count; ++row)
 		{
 			const int track = order[row];
@@ -183,7 +198,7 @@ void ReadMixerTracks()
 			Get("mixer-channels")->AppendChild(Get("mixer-channels")->RemoveChild(strip));
 		}
 		Get("mixer-channels")->SetProperty("width", Rml::CreateString("%ddp", track_count * 84 - 8));
-		UpdateMixerRackLabel();
+		ShowMixerRack();
 		mixer_metadata = value;
 	}
 	catch (const std::filesystem::filesystem_error&) {}

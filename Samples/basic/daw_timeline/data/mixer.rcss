@@ -63,6 +63,10 @@ button.active { border-color: #58cede; color: #71e2f0; background: #17313a; }
 #effects-empty { margin: 12dp 0; color: #515d68; font-size: 10dp; text-align: center; }
 .effect-row { display: flex; height: 36dp; align-items: center; margin-bottom: 5dp; padding: 3dp; border: 1dp #303c47; background: #171d23; }
 .effect-row b { flex: 1 1 0; min-width: 0; padding-left: 9dp; font-size: 10dp; }
+.vst-effect-row { height: 44dp; }
+.vst-editor-button { flex: 1 1 0; min-width: 0; height: 38dp; margin: 0 3dp; padding: 1dp 4dp; text-align: left; overflow: hidden; }
+.vst-editor-button b { display: block; padding-left: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vst-editor-button small { display: block; font-size: 8dp; color: #8296a3; }
 .effect-toggle { width: 30dp; height: 26dp; font-size: 9dp; line-height: 24dp; }
 .effect-remove { width: 25dp; height: 26dp; border: 0; font-size: 10dp; line-height: 26dp; }
 .add-effect { flex: 0 0 28dp; width: 100%; height: 28dp; margin-top: 7dp; font-size: 11dp; line-height: 26dp; }

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 KinuDAW contributors. MIT License.
 #include "AudioEngine.h"
 #include "PluginIPC.h"
+#include "DelayCompensation.h"
 #include "json.hpp"
 #include <fstream>
 #include <iostream>
@@ -11,6 +12,49 @@ static void require(bool ok,const char* why) { if(!ok) throw std::runtime_error(
 int main(int argc,char** argv) {
     try {
         auto engine=std::make_unique<Kinu::AudioEngine>(); auto scene=std::make_unique<Kinu::Scene>();
+        {
+            auto delay=std::make_unique<Kinu::SampleDelay<float>>();
+            for(int i=0;i<1000;++i) require(delay->push(i==0?1.f:0.f,257)==(i==257?1.f:0.f),"Delay line impulse mismatch");
+            delay->reset(); require(delay->push(1.f,0)==1.f,"Zero delay failed");
+            Kinu::PluginInfo fixture{KINU_TEST_PLUGIN_PATH,"12405080112233445566778899AABBCC","Kinu Delay Test","Fx","KinuDAW tests"};
+            Kinu::RemotePlugin plugin(fixture); plugin.synchronous(true);
+            require(plugin.latency()==257,"VST declared latency missing from IPC");
+            float left[Kinu::Block],right[Kinu::Block];
+            for(int b=0;b<4;++b) { std::fill_n(left,Kinu::Block,1.f); std::fill_n(right,Kinu::Block,1.f); plugin.process(left,right,Kinu::Block,0,120,false); }
+            plugin.midi(0xbf,7,64,32); std::fill_n(left,Kinu::Block,1.f); std::fill_n(right,Kinu::Block,1.f); plugin.process(left,right,Kinu::Block,0,120,false);
+            require(std::abs(left[31]-1.f)<1e-6 && std::abs(left[32]-64/127.f)<1e-6,"Channel 16 sample-offset MIDI CC mapping failed");
+            plugin.midi(0xef,0,64,64); std::fill_n(left,Kinu::Block,1.f); std::fill_n(right,Kinu::Block,1.f); plugin.process(left,right,Kinu::Block,0,120,false);
+            require(std::abs(left[63]-64/127.f)<1e-6 && std::abs(left[64]-8192/16383.f)<1e-6,"Pitch bend normalization failed");
+            plugin.midi(0xdf,100,0,16); std::fill_n(left,Kinu::Block,1.f); std::fill_n(right,Kinu::Block,1.f); plugin.process(left,right,Kinu::Block,0,120,false); require(std::abs(left[16]-100/127.f)<1e-6,"Channel pressure failed");
+            plugin.midi(0xb0,20,127); for(int i=0;i<100 && plugin.latency()!=513;++i) { std::fill_n(left,Kinu::Block,0.f); std::fill_n(right,Kinu::Block,0.f); plugin.process(left,right,Kinu::Block,0,120,false); Sleep(2); } require(plugin.latency()==513,"kLatencyChanged reactivation and IPC update failed");
+            plugin.note(65,90,true,42,6); plugin.parameter(1,.25,32); std::fill_n(left,Kinu::Block,1.f); std::fill_n(right,Kinu::Block,1.f); plugin.process(left,right,Kinu::Block,0,120,false);
+            require(plugin.midiOutputCount()==1 && plugin.midiOutput()[0].status==0x96 && plugin.midiOutput()[0].data1==65 && plugin.midiOutput()[0].offset==42,"Plugin MIDI output bridge failed");
+            plugin.allOff(); plugin.note(67,100,true); plugin.process(left,right,Kinu::Block,0,120,false);
+            bool firstNote=false; for(int i=0;i<plugin.midiOutputCount();++i) firstNote|=plugin.midiOutput()[i].status==0x90 && plugin.midiOutput()[i].data1==67;
+            require(firstNote,"All Notes Off exhausted the event queue and dropped the first note");
+            auto pdc=std::make_unique<Kinu::AudioEngine>(); auto graph=std::make_unique<Kinu::Scene>(); Kinu::AudioFile impulse; impulse.samples.assign(48000*2,0); impulse.samples[0]=impulse.samples[1]=.1f;
+            graph->bpm=120; graph->count=2;
+            for(int t=0;t<2;++t) { graph->clips[t].track=t; graph->clips[t].audio=&impulse; graph->clips[t].length=2; }
+            std::string error; require(pdc->loadPlugin(0,fixture,error,1),error.c_str()); require(pdc->loadPlugin(0,fixture,error,2),error.c_str()); require(pdc->loadPlugin(5,fixture,error,1),error.c_str());
+            require(pdc->compensationFrames()==771,"Serial and master latency sum failed"); pdc->publish(*graph); pdc->transport(true,0);
+            std::array<float,2048> mixed{}; pdc->render(mixed.data(),1024);
+            for(int i=0;i<1024;++i) require(std::abs(mixed[i*2]-(i==771?.2f:0.f))<1e-6,"PDC failed to align dry, serial FX and master impulse");
+            graph->channels[5].automationCount=2; graph->channels[5].automation[0]={0,0}; graph->channels[5].automation[1]={.01,-48};
+            pdc->publish(*graph); pdc->transport(true,0); pdc->render(mixed.data(),1024);
+            require(std::abs(mixed[771*2]-.2f)<1e-6,"Master volume automation did not follow compensated audio clock");
+            graph->channels[5].automationCount=0; pdc->publish(*graph);
+            auto wav=std::filesystem::temp_directory_path()/"kinu-pdc-test.wav"; require(pdc->exportWav(wav,2,error),error.c_str()); auto* rendered=pdc->import(wav,error); require(rendered && std::abs(rendered->samples[0]-.2f)<1e-6 && rendered->samples.size()==96000,"PDC export trim or duration failed"); std::filesystem::remove(wav);
+            pdc->bypassPlugin(0,2,true); require(pdc->compensationFrames()==514,"Bypass did not remove latency"); require(pdc->unloadPlugin(5,error,1),error.c_str()); require(pdc->compensationFrames()==257,"Removal did not rebuild latency");
+            graph->count=1; impulse.samples.assign(48000*2,.1f); graph->parameterCount=1; graph->parameters[0].track=0; graph->parameters[0].slot=1; graph->parameters[0].id=1; graph->parameters[0].count=2; graph->parameters[0].points[0]={0,-34.5f}; graph->parameters[0].points[1]={128,-34.5f};
+            pdc->publish(*graph); pdc->transport(true,0); pdc->render(mixed.data(),1024); require(std::abs(mixed[800*2]-.025f)<1e-6,"Plugin parameter automation did not affect DSP");
+            require(pdc->loadPlugin(1,fixture,error,1),error.c_str()); pdc->pluginRouting(0,1,{1,0,0,1,0,0}); pdc->pluginRouting(1,1,{1,0,0,1,0,0}); pdc->render(mixed.data(),128); require(pdc->midiRoutingBlocked(),"Cyclic MIDI routing was not blocked");
+            pdc->pluginRouting(1,1,{1,0,0,0,0,0}); pdc->render(mixed.data(),128); require(!pdc->midiRoutingBlocked(),"Valid MIDI connection remained blocked");
+            auto synth=std::make_unique<Kinu::AudioEngine>(); std::array<float,256> sound{};
+            synth->midiMessage(0,0x93,60,100); synth->render(sound.data(),128);
+            synth->midiMessage(0,0xb3,64,127); synth->midiMessage(0,0x83,60,0); synth->render(sound.data(),128); double energy=0; for(float s:sound) energy+=s*s; require(energy>0,"Sustain pedal did not hold note");
+            synth->midiMessage(0,0xb3,64,0); synth->render(sound.data(),128); for(float s:sound) require(s==0,"Sustain pedal release left stuck notes");
+            std::cout<<"PDC serial/master impulse and dynamic latency, export trim, bypass/removal, MIDI CC/channel 16, bend, pressure, sustain, output events, parameter automation and routing cycle rejection passed\n";
+        }
         if(argc>=2 && std::string(argv[1])=="--capture") {
             std::string error; require(engine->start(error),error.c_str());
             auto path=std::filesystem::temp_directory_path()/"kinu-capture-test.wav";

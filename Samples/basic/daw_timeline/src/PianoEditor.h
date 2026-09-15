@@ -10,7 +10,7 @@ Kinu::Note piano_original;
 void PreparePiano(int track);
 void ReadPianoEdits();
 void InitialisePianoShared() {
-    auto name=L"Local\\KinuPiano-v2-"+std::to_wstring(mixer_session_id);
+    auto name=L"Local\\KinuPiano-v3-"+std::to_wstring(mixer_session_id);
     piano_mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(SharedPiano),name.c_str());
     bool fresh=GetLastError()!=ERROR_ALREADY_EXISTS;
     if(piano_mapping) piano_shared=static_cast<SharedPiano*>(MapViewOfFile(piano_mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(SharedPiano)));

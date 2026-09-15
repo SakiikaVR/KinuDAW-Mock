@@ -17,11 +17,12 @@ public static class KinuCapture {
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc proc,IntPtr param);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr window,StringBuilder text,int count);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window,StringBuilder text,int count);
  public static IntPtr Find(int pid,string title) {
    IntPtr result=IntPtr.Zero; int area=0;
    EnumWindows((window,param)=> { uint owner; GetWindowThreadProcessId(window,out owner); Rect r;
-     StringBuilder text=new StringBuilder(2048); GetWindowTextW(window,text,2048);
-     if(owner==pid && (title.Length==0 || text.ToString().Contains(title)) && GetWindowRect(window,out r) && (r.Right-r.Left)*(r.Bottom-r.Top)>area) { result=window; area=(r.Right-r.Left)*(r.Bottom-r.Top); } return true;
+     StringBuilder text=new StringBuilder(2048); GetWindowTextW(window,text,2048); StringBuilder name=new StringBuilder(256); GetClassNameW(window,name,256);
+     if(owner==pid && name.ToString().StartsWith("Kinu") && (title.Length==0 || text.ToString().Contains(title)) && GetWindowRect(window,out r) && (r.Right-r.Left)*(r.Bottom-r.Top)>area) { result=window; area=(r.Right-r.Left)*(r.Bottom-r.Top); } return true;
    },IntPtr.Zero); return result;
  }
 }

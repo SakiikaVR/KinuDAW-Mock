@@ -37,7 +37,7 @@ void RefreshInstrumentList() {
         if(bool(instrument_favorites[i])!=bool(favorite)) continue;
         auto* row=Get(Rml::CreateString("instrument-row-%d",i).c_str());
         const auto& item=installed_plugins[i];
-        bool match=Rml::StringUtilities::ToLower(item.name+" "+item.category+" "+item.vendor).find(query)!=Rml::String::npos;
+        bool match=Rml::StringUtilities::ToLower(item.name+" "+item.category+" "+item.vendor).find(query)!=Rml::String::npos && (!instrument_slot || item.category.find("Instrument")==std::string::npos);
         row->SetProperty("display",match?"flex":"none"); row->SetClass("selected",i==instrument_selected);
         SetText(Rml::CreateString("instrument-heart-%d",i).c_str(),favorite?u8"♥":u8"♡");
         Get("instrument-list")->AppendChild(Get("instrument-list")->RemoveChild(row)); visible+=match;

@@ -3,6 +3,7 @@ param([int]$ProcessId,[ValidateSet('click','double','drag','wheel','hold','relea
 $ErrorActionPreference='Stop'
 Add-Type @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class KinuTestInput {
  public delegate bool EnumProc(IntPtr h,IntPtr param);
@@ -16,7 +17,8 @@ public static class KinuTestInput {
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int height,uint flags);
  [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint dx,uint dy,uint data,UIntPtr extra);
- public static IntPtr Find(int pid) { IntPtr result=IntPtr.Zero; EnumWindows((h,p)=> { uint owner; GetWindowThreadProcessId(h,out owner); if(owner==pid && IsWindowVisible(h)) { result=h; return false; } return true; },IntPtr.Zero); return result; }
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h,StringBuilder text,int count);
+ public static IntPtr Find(int pid) { IntPtr result=IntPtr.Zero; EnumWindows((h,p)=> { uint owner; GetWindowThreadProcessId(h,out owner); var name=new StringBuilder(256); GetClassNameW(h,name,256); if(owner==pid && IsWindowVisible(h) && name.ToString().StartsWith("Kinu")) { result=h; return false; } return true; },IntPtr.Zero); return result; }
  public static void Send(IntPtr h,uint msg,int w,int x,int y) { PostMessageW(h,msg,new IntPtr(w),new IntPtr((y<<16)|(x&65535))); }
  public static void Move(IntPtr h,int x,int y) { Point p=new Point { X=x,Y=y }; ClientToScreen(h,ref p); SetCursorPos(p.X,p.Y); }
 }

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 KinuDAW contributors. MIT License.
 std::filesystem::path project_path;
-struct VolumeAutomation { int target=-1; std::vector<Kinu::AutomationPoint> points; };
+struct ParameterBinding { int target=0,slot=0; unsigned param=0; std::string name; };
+struct VolumeAutomation { int target=-1; std::vector<Kinu::AutomationPoint> points; int slot=-1; unsigned param=0; std::string name; std::vector<ParameterBinding> bindings; };
 std::array<VolumeAutomation,kMaxTracks> volume_automation;
 int automation_drag_track=-1,automation_drag_point=-1;
 void RefreshAutomationGeometry() {
@@ -13,7 +14,8 @@ void RefreshAutomationGeometry() {
 void RefreshAutomation(int t) {
     auto* lane=Get(Rml::CreateString("track-lane-%d",t).c_str()); auto& curve=volume_automation[t];
     lane->SetAttribute("onmousedown",Rml::CreateString("automation-point:%d",t));
-    std::string markup="<span class=\"empty-track-hint\">"+Rml::StringUtilities::EncodeRml(std::string(curve.target>=0?track_names[curve.target]:"Unassigned")+" / Volume")+"</span>";
+    std::string markup="<span class=\"empty-track-hint\">"+Rml::StringUtilities::EncodeRml(std::string(curve.target>=0?track_names[curve.target]:"Unassigned")+" / "+(curve.slot>=0?curve.name:"Volume"))+"</span>";
+    if(!curve.bindings.empty()) { std::string label=curve.target>=0?std::string(track_names[curve.target])+" / "+(curve.slot>=0?curve.name:"Volume"):"Automation"; for(auto b:curve.bindings) label+=" / "+b.name; markup="<span class=\"empty-track-hint\">"+Rml::StringUtilities::EncodeRml(label)+"</span>"; }
     for(size_t i=0;i<curve.points.size();++i) markup+="<i class=\"automation-point\" id=\"auto-"+std::to_string(t)+"-"+std::to_string(i)+"\"></i>";
     lane->SetInnerRML(markup); RefreshAutomationGeometry();
 }
@@ -57,10 +59,37 @@ std::filesystem::path FileDialog(bool save,const wchar_t* filter,const wchar_t* 
     dialog.Flags=OFN_EXPLORER|OFN_NOCHANGEDIR|OFN_PATHMUSTEXIST|(save?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST);
     if(save?GetSaveFileNameW(&dialog):GetOpenFileNameW(&dialog)) return path; return {};
 }
+std::string PluginSessionMetadata() {
+    nlohmann::json result={{"automation",nlohmann::json::array()},{"plugins",nlohmann::json::array()}};
+    for(int t=0;t<track_count;++t) {
+        if(track_automation[t]) { const auto& c=volume_automation[t]; nlohmann::json bindings=nlohmann::json::array(); for(auto b:c.bindings) bindings.push_back({{"target",b.target},{"slot",b.slot},{"param",b.param}}); result["automation"].push_back({{"track",t},{"name",track_names[t]},{"target",c.target},{"slot",c.slot},{"param",c.param},{"bindings",bindings}}); }
+        for(int s=0;s<4;++s) if(audio_engine && audio_engine->hasPlugin(t,s)) result["plugins"].push_back({{"track",t},{"slot",s},{"name",std::string(track_names[t])+" / "+audio_engine->pluginInfo(t,s)->name},{"route",audio_engine->pluginRouting(t,s)}});
+    } return result.dump();
+}
+void ReadPluginBindings() {
+    if(!audio_engine) return;
+    for(int t=0;t<track_count;++t) for(int s=0;s<4;++s) {
+        int selection=0; unsigned id=0; double value=0; std::string name;
+        if(!audio_engine->pluginBindingRequest(t,s,selection,id,value,name)) continue;
+        if(!std::isfinite(value) || selection < -1 || selection>track_count || (selection>0 && !track_automation[selection-1])) { MockNotice("Invalid parameter automation target"); continue; }
+        int count=0; for(int a=0;a<track_count;++a) count+=int(volume_automation[a].bindings.size())+(volume_automation[a].slot>=0?1:0);
+        if(selection!=0 && count>=128) { MockNotice("Parameter automation limit: 128 bindings"); continue; }
+        int created=-1; if(selection==-1) { created=AddMockTrack(false,true); if(created<0) continue; }
+        for(int a=0;a<track_count;++a) if(track_automation[a]) { auto& curve=volume_automation[a];
+            curve.bindings.erase(std::remove_if(curve.bindings.begin(),curve.bindings.end(),[&](const ParameterBinding& b) { return b.target==t && b.slot==s && b.param==id; }),curve.bindings.end());
+            if(curve.target==t && curve.slot==s && curve.param==id) { curve.target=-1; curve.slot=-1; curve.param=0; curve.name.clear(); RefreshAutomation(a); }
+        }
+        if(selection==0) continue;
+        int a=created>=0?created:selection-1; auto& curve=volume_automation[a];
+        if(created>=0) { curve.target=t; curve.slot=s; curve.param=id; curve.name=name; float db=float(-48+std::clamp(value,0.,1.)*54); curve.points={{0,db},{128,db}}; }
+        else curve.bindings.push_back({t,s,id,name});
+        RefreshAutomation(a); MockNotice(name+" / Automation connected");
+    }
+}
 void SyncAudio() {
     if(!audio_engine) return;
     SetText("audio-xruns",Rml::CreateString("XRUN %u",audio_engine->underruns()));
-    auto& scene=*render_scene; scene.count=0; scene.bpm=bpm; scene.end=kProjectBars*kBeatsPerBar;
+    auto& scene=*render_scene; scene.count=0; scene.parameterCount=0; scene.bpm=bpm; scene.end=kProjectBars*kBeatsPerBar;
     scene.loop=looping; scene.loopStart=loop_start_beat; scene.loopEnd=loop_end_beat;
     for(int t=0;t<track_count;++t) {
         const auto& c=track_channels[t]; scene.channels[t]={std::pow(10.f,c.gain_db/20.f),c.pan,c.muted,c.solo};
@@ -68,8 +97,10 @@ void SyncAudio() {
         scene.channels[t].automationCount=0;
     }
     for(int t=0;t<track_count;++t) if(track_automation[t]) { auto& curve=volume_automation[t]; if(curve.target>=0 && curve.target<track_count) {
-        auto& c=scene.channels[curve.target]; c.automationCount=int(std::min<size_t>(64,curve.points.size())); std::copy_n(curve.points.data(),c.automationCount,c.automation.data());
+        if(curve.slot>=0) { auto& p=scene.parameters[scene.parameterCount++]; p.track=curve.target; p.slot=curve.slot; p.id=curve.param; p.count=int(std::min<size_t>(64,curve.points.size())); std::copy_n(curve.points.data(),p.count,p.points.data()); }
+        else { auto& c=scene.channels[curve.target]; c.automationCount=int(std::min<size_t>(64,curve.points.size())); std::copy_n(curve.points.data(),c.automationCount,c.automation.data()); }
     } }
+    for(int t=0;t<track_count;++t) if(track_automation[t]) for(auto b:volume_automation[t].bindings) { if(scene.parameterCount>=int(scene.parameters.size())) break; auto& p=scene.parameters[scene.parameterCount++]; p.track=b.target; p.slot=b.slot; p.id=b.param; p.count=int(std::min<size_t>(64,volume_automation[t].points.size())); std::copy_n(volume_automation[t].points.data(),p.count,p.points.data()); }
     for(const auto& clip:clips) {
         if(scene.count>=Kinu::MaxClips) break;
         int t=ClipTrack(Get(clip.id.c_str())); if(t<0 || t==5 || track_automation[t]) continue;
@@ -77,6 +108,7 @@ void SyncAudio() {
         out.audio=clip.audio; out.offset=clip.source_offset; out.pattern=clip.pattern_length;
         out.noteCount=int(std::min<size_t>(clip.notes.size(),out.notes.size()));
         std::copy_n(clip.notes.data(),out.noteCount,out.notes.data());
+        out.controlCount=int(std::min<size_t>(clip.controls.size(),out.controls.size())); std::copy_n(clip.controls.data(),out.controlCount,out.controls.data());
     }
     audio_engine->publish(scene);
     if(playing!=audio_last_playing || std::abs(playhead_beat-audio_last_position)>.002f || scrubbing) audio_engine->transport(playing,playhead_beat);
@@ -119,7 +151,10 @@ void SaveProject(bool recovery) {
         for(int t=0;t<track_count;++t) {
             auto c=track_channels[t]; nlohmann::json j={{"name",track_names[t]},{"audio",track_audio[t]},{"automation",track_automation[t]},{"gain",c.gain_db},{"pan",c.pan},{"mute",c.muted},{"solo",c.solo},{"color",track_color_presets[t]},{"order",track_order[t]}};
             j["effects"]={c.effects[0],c.effects[1],c.effects[2]};
-            if(track_automation[t]) { auto& curve=volume_automation[t]; j["volumeAutomation"]={{"target",curve.target},{"points",nlohmann::json::array()}}; for(auto point:curve.points) j["volumeAutomation"]["points"].push_back({point.beat,point.db}); }
+            j["vstBypass"]={audio_engine->pluginBypassed(t,0),audio_engine->pluginBypassed(t,1),audio_engine->pluginBypassed(t,2),audio_engine->pluginBypassed(t,3)};
+            j["vstMidiRouting"]=nlohmann::json::array(); for(int s=0;s<4;++s) j["vstMidiRouting"].push_back(audio_engine->pluginRouting(t,s));
+            if(track_automation[t]) { auto& curve=volume_automation[t]; j["volumeAutomation"]={{"target",curve.target},{"points",nlohmann::json::array()},{"slot",curve.slot},{"param",curve.param},{"name",curve.name}}; for(auto point:curve.points) j["volumeAutomation"]["points"].push_back({point.beat,point.db}); }
+            if(track_automation[t]) { j["volumeAutomation"]["bindings"]=nlohmann::json::array(); for(auto b:volume_automation[t].bindings) j["volumeAutomation"]["bindings"].push_back({{"target",b.target},{"slot",b.slot},{"param",b.param},{"name",b.name}}); }
             if(auto* info=audio_engine->pluginInfo(t)) project_plugins[t]=*info;
             const auto& info=project_plugins[t];
             if(!info.uid.empty()) {
@@ -140,7 +175,8 @@ void SaveProject(bool recovery) {
             int t=ClipTrack(Get(c.id.c_str())); if(t<0 || t==5) continue;
             nlohmann::json j={{"id",c.id},{"label",c.label},{"track",t},{"beat",c.start_beat},{"length",c.length_beats},{"offset",c.source_offset},{"pattern",c.pattern_length},{"notes",nlohmann::json::array()}};
             if(c.audio) j["file"]=c.audio->path;
-            for(const auto& n:c.notes) j["notes"].push_back({{"pitch",n.pitch},{"velocity",n.velocity},{"beat",n.beat},{"duration",n.duration}});
+            for(const auto& n:c.notes) j["notes"].push_back({{"pitch",n.pitch},{"velocity",n.velocity},{"beat",n.beat},{"duration",n.duration},{"channel",n.channel}});
+            j["midiControls"]=nlohmann::json::array(); for(const auto& m:c.controls) j["midiControls"].push_back({{"status",m.status},{"data1",m.data1},{"data2",m.data2},{"beat",m.beat}});
             root["clips"].push_back(j);
         }
         auto temporary=path; temporary+=L".tmp";
@@ -163,6 +199,7 @@ void LoadProjectFile(const std::filesystem::path& path) {
         auto& tracks=root.at("tracks"); if(!tracks.is_array() || !root.at("clips").is_array() || tracks.size()<6 || tracks.size()>32 || root.at("clips").size()>Kinu::MaxClips) throw std::runtime_error("Project track/clip limit exceeded");
         auto next=std::make_unique<Kinu::AudioEngine>(); ClipSnapshot snapshot; std::string warnings;
         std::vector<int> orders;
+        unsigned parameterBindings=0;
         for(size_t t=0;t<tracks.size();++t) {
             auto& j=tracks[t]; int order=j.at("order"); orders.push_back(order);
             auto name=j.at("name").get<std::string>(); if(name.size()>1024) throw std::runtime_error("Track name too long");
@@ -172,6 +209,10 @@ void LoadProjectFile(const std::filesystem::path& path) {
             if(!std::isfinite(gain)||!std::isfinite(pan)||gain < -48 || gain>6 || pan < -1 || pan>1 || j.at("color").get<int>()<0 || j.at("color").get<int>()>8) throw std::runtime_error("Invalid channel values");
             if(j.contains("volumeAutomation")) {
                 auto curve=j["volumeAutomation"]; int target=curve.at("target"); if(target < -1 || target>=int(tracks.size()) || curve.at("points").size()>64) throw std::runtime_error("Invalid automation routing");
+                int slot=curve.value("slot",-1); if(slot < -1 || slot>3 || curve.value("name",std::string()).size()>1024) throw std::runtime_error("Invalid parameter automation");
+                if(slot>=0) { curve.at("param").get<unsigned>(); ++parameterBindings; }
+                if(curve.contains("bindings")) for(auto b:curve["bindings"]) { int target=b.at("target"),s=b.at("slot"); b.at("param").get<unsigned>(); if(target<0 || target>=int(tracks.size()) || s<0 || s>3 || b.at("name").get<std::string>().size()>1024 || ++parameterBindings>128) throw std::runtime_error("Invalid parameter binding"); }
+                if(parameterBindings>128) throw std::runtime_error("Parameter automation limit exceeded");
                 double previous=-1; for(auto p:curve.at("points")) { double beat=p.at(0); float db=p.at(1); if(!std::isfinite(beat)||!std::isfinite(db)||beat<0||beat>128||beat<=previous||db < -48||db>6) throw std::runtime_error("Invalid automation point"); previous=beat; }
             }
         }
@@ -187,7 +228,12 @@ void LoadProjectFile(const std::filesystem::path& path) {
             if(j.contains("file")) { std::string error; c.audio=next->import(std::filesystem::u8path(j.at("file").get<std::string>()),error); if(!c.audio) throw std::runtime_error(error+": "+j.at("file").get<std::string>()); }
             for(const auto& n:j.at("notes")) {
                 Kinu::Note note{n.at("pitch"),n.at("velocity"),n.at("beat"),n.at("duration")};
+                note.channel=n.value("channel",0); if(note.channel<0 || note.channel>15) throw std::runtime_error("Invalid MIDI channel");
                 if(note.pitch<0||note.pitch>127||note.velocity<1||note.velocity>127||!std::isfinite(note.beat)||!std::isfinite(note.duration)||note.beat<0||note.beat>128||note.duration<=0||note.duration>128||c.notes.size()>=128) throw std::runtime_error("Invalid MIDI note"); c.notes.push_back(note);
+            }
+            if(j.contains("midiControls")) for(auto m:j["midiControls"]) {
+                Kinu::MidiControl control{m.at("status"),m.at("data1"),m.at("data2"),m.at("beat")}; int kind=control.status&0xf0;
+                if(control.status<0x80 || control.status>=0xf0 || (kind!=0xb0 && kind!=0xe0 && kind!=0xd0 && kind!=0xa0) || control.data1<0 || control.data1>127 || control.data2<0 || control.data2>127 || !std::isfinite(control.beat) || control.beat<0 || control.beat>128 || c.controls.size()>=256) throw std::runtime_error("Invalid MIDI control"); c.controls.push_back(control);
             }
             snapshot.clips.push_back({c,t,"<b>"+Rml::StringUtilities::EncodeRml(c.label)+"</b>",c.audio?"clip audio":"clip"});
         }
@@ -202,6 +248,8 @@ void LoadProjectFile(const std::filesystem::path& path) {
             if(!next->loadPlugin(int(t),info,error,s) || !next->restorePluginState(int(t),p.at("state").get<std::vector<unsigned char>>(),s)) warnings+=info.name+": "+error+"; ";
         }
         if(mock_recording) StopMockRecording();
+        for(size_t t=0;t<tracks.size();++t) if(tracks[t].contains("vstBypass")) { auto values=tracks[t]["vstBypass"]; if(values.size()!=4) throw std::runtime_error("Invalid VST bypass slots"); for(int s=0;s<4;++s) next->bypassPlugin(int(t),s,values.at(s).get<bool>()); }
+        for(size_t t=0;t<tracks.size();++t) if(tracks[t].contains("vstMidiRouting")) { auto values=tracks[t]["vstMidiRouting"]; if(values.size()!=4) throw std::runtime_error("Invalid MIDI routing slots"); for(int s=0;s<4;++s) { auto route=values.at(s).get<std::array<int,6>>(); for(int i=0;i<6;++i) if(route[i]<0 || route[i]>(i%3==0?1:15)) throw std::runtime_error("Invalid MIDI routing value"); next->pluginRouting(int(t),s,route); } }
         EndClipDrag(); EndAutomationGesture();
         for(int t=0;t<kMaxTracks;++t) if(piano_processes[t]) { TerminateProcess(piano_processes[t],0); CloseHandle(piano_processes[t]); piano_processes[t]=nullptr; }
         playing=false; audio_engine->stop();
@@ -211,7 +259,8 @@ void LoadProjectFile(const std::filesystem::path& path) {
             auto j=tracks[t]; custom_track_names[t]=j.at("name"); track_audio[t]=j.at("audio"); track_automation[t]=j.at("automation"); track_order[t]=j.at("order"); track_color_presets[t]=j.at("color");
             track_channels[t].gain_db=j.at("gain"); track_channels[t].pan=j.at("pan"); track_channels[t].muted=j.at("mute"); track_channels[t].solo=j.at("solo");
             if(j.contains("effects")) for(int i=0;i<3;++i) track_channels[t].effects[i]=j["effects"].at(i);
-            volume_automation[t]={}; if(j.contains("volumeAutomation")) { auto curve=j["volumeAutomation"]; volume_automation[t].target=curve.at("target"); for(auto p:curve.at("points")) volume_automation[t].points.push_back({p.at(0),p.at(1)}); }
+            volume_automation[t]={}; if(j.contains("volumeAutomation")) { auto curve=j["volumeAutomation"]; volume_automation[t].target=curve.at("target"); volume_automation[t].slot=curve.value("slot",-1); volume_automation[t].param=curve.value("param",0u); volume_automation[t].name=curve.value("name",std::string()); for(auto p:curve.at("points")) volume_automation[t].points.push_back({p.at(0),p.at(1)}); }
+            if(j.contains("volumeAutomation") && j["volumeAutomation"].contains("bindings")) for(auto b:j["volumeAutomation"]["bindings"]) volume_automation[t].bindings.push_back({b.at("target"),b.at("slot"),b.at("param"),b.at("name")});
             if(shared_volume) { InterlockedExchange(shared_volume+t,LONG(track_channels[t].gain_db*10)); InterlockedExchange(shared_volume+kMaxTracks+t,(track_channels[t].muted?1:0)|(track_channels[t].solo?2:0)); }
             if(shared_volume) { LONG flags=0; for(int i=0;i<3;++i) if(track_channels[t].effects[i]) flags|=1<<i; InterlockedExchange(shared_volume+kFxStateBase+t,flags); }
             project_plugins[t]={}; cached_plugin_states[t].clear();
@@ -251,7 +300,7 @@ void AudioSettings(Rml::Element* trigger) {
     }
 }
 void AddVstEffect() {
-    int t=track_fx_open; if(!audio_engine || t<0 || t>=track_count || t==5) return;
+    int t=track_fx_open; if(!audio_engine || t<0 || t>=track_count || track_automation[t]) return;
     int slot=1; while(slot<4 && audio_engine->hasPlugin(t,slot)) ++slot;
     if(slot>=4) { MockNotice(u8"VST3エフェクトは1トラック3個までです"); return; }
     OpenToolWindow(instruments_process,instruments_process_id,L"--instruments --target="+std::to_wstring(t)+L" --slot="+std::to_wstring(slot)+L" --session="+std::to_wstring(mixer_session_id));
@@ -301,26 +350,35 @@ void InitialiseMidiInput() {
 }
 void CloseMidiInput() { for(auto& midi:midi_inputs) if(midi) { midiInStop(midi); midiInReset(midi); midiInClose(midi); midi=nullptr; } }
 void ExternalMidi(DWORD packed) {
-    if(!audio_engine) return; int status=packed&0xf0,pitch=(packed>>8)&127,velocity=(packed>>16)&127;
-    if(status!=0x90 && status!=0x80) return; bool on=status==0x90 && velocity;
+    if(!audio_engine) return; int status=packed&255,kind=status&0xf0,pitch=(packed>>8)&127,velocity=(packed>>16)&127;
+    if(kind!=0x90 && kind!=0x80 && kind!=0xb0 && kind!=0xe0 && kind!=0xd0 && kind!=0xa0) return; bool on=kind==0x90 && velocity;
+    auto route=[&](int t) {
+        audio_engine->midiMessage(t,status,pitch,velocity);
+        if(kind==0x90 || kind==0x80) RecordMidi(t,pitch,velocity,on,status&15);
+        else if(mock_recording && mock_record_clips[t] && !track_audio[t]) {
+            auto* clip=mock_record_clips[t]; double beat=(Rml::GetSystemInterface()->GetElapsedTime()-mock_record_start)*bpm/60.;
+            if(clip->controls.size()<256) clip->controls.push_back({status,pitch,velocity,std::clamp(beat,0.,128.)}); else MockNotice("MIDI control recording limit: 256 events per clip");
+        }
+    };
     bool routed=false;
     for(int t=0;t<track_count;++t) if(track_record_armed[t] && !track_audio[t] && !track_automation[t] && t!=5) {
-        audio_engine->midi(t,pitch,velocity,on); RecordMidi(t,pitch,velocity,on); routed=true;
+        route(t); routed=true;
     }
     if(!routed) if(auto* selected=document->QuerySelector(".track-header.selected")) {
-        int t=std::atoi(selected->GetId().c_str()+13); if(t>=0 && t<track_count && !track_audio[t] && t!=5) audio_engine->midi(t,pitch,velocity,on);
+        int t=std::atoi(selected->GetId().c_str()+13); if(t>=0 && t<track_count && !track_automation[t]) route(t);
     }
 }
-std::array<std::array<double,128>,kMaxTracks> record_note_start;
-std::array<std::array<int,128>,kMaxTracks> record_note_velocity{};
-void RecordMidi(int t,int pitch,int velocity,bool on) {
+std::array<std::array<std::array<double,128>,16>,kMaxTracks> record_note_start;
+std::array<std::array<std::array<int,128>,16>,kMaxTracks> record_note_velocity{};
+void RecordMidi(int t,int pitch,int velocity,bool on,int channel) {
     if(!mock_recording || t<0 || t>=track_count || pitch<0 || pitch>127 || track_audio[t] || !mock_record_clips[t]) return;
     double beat=(Rml::GetSystemInterface()->GetElapsedTime()-mock_record_start)*bpm/60.;
-    if(on) { record_note_start[t][pitch]=beat; record_note_velocity[t][pitch]=velocity; }
-    else if(record_note_start[t][pitch]>=0) {
-        auto* clip=mock_record_clips[t]; double start=record_note_start[t][pitch];
-        if(clip->notes.size()<128) clip->notes.push_back({pitch,std::clamp(record_note_velocity[t][pitch],1,127),start,std::max(.02,beat-start)});
-        record_note_start[t][pitch]=-1;
+    channel=std::clamp(channel,0,15);
+    if(on) { record_note_start[t][channel][pitch]=beat; record_note_velocity[t][channel][pitch]=velocity; }
+    else if(record_note_start[t][channel][pitch]>=0) {
+        auto* clip=mock_record_clips[t]; double start=record_note_start[t][channel][pitch];
+        if(clip->notes.size()<128) clip->notes.push_back({pitch,std::clamp(record_note_velocity[t][channel][pitch],1,127),start,std::max(.02,beat-start),channel});
+        record_note_start[t][channel][pitch]=-1;
     }
 }
 void ToggleRecording() {
@@ -339,7 +397,7 @@ void ToggleRecording() {
         if(!audio_engine->beginRecording(path,error)) { MockNotice(error); return; }
     }
     SaveClipUndo();
-    for(auto& row:record_note_start) row.fill(-1);
+    for(auto& track:record_note_start) for(auto& row:track) row.fill(-1);
     for(int t=0;t<track_count;++t) if(t!=5 && track_record_armed[t] && !track_automation[t]) {
         mock_record_clips[t]=AddMockAudioClip(t,track_audio[t]?"Audio recording":"MIDI recording",playhead_beat,.25,true);
         if(mock_record_clips[t]) mock_record_clips[t]->pattern_length=128;
@@ -350,7 +408,7 @@ void ToggleRecording() {
 }
 void FinishRecording() {
     if(!audio_engine) return;
-    for(int t=0;t<track_count;++t) for(int p=0;p<128;++p) if(record_note_start[t][p]>=0) RecordMidi(t,p,0,false);
+    for(int t=0;t<track_count;++t) for(int c=0;c<16;++c) for(int p=0;p<128;++p) if(record_note_start[t][c][p]>=0) RecordMidi(t,p,0,false,c);
     std::string error; auto path=audio_engine->endRecording(error);
     const Kinu::AudioFile* media=path.empty()?nullptr:audio_engine->import(path,error);
     for(int t=0;t<track_count;++t) if(auto* clip=mock_record_clips[t]) {

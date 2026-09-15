@@ -1,5 +1,7 @@
 // Copyright (c) 2026 KinuDAW contributors. MIT License.
 #include "VstHost.h"
+#include "PluginEditor.h"
+#include "PluginIPC.h"
 #include "public.sdk/source/common/memorystream.h"
 #include "pluginterfaces/base/funknownimpl.h"
 #include <algorithm>
@@ -61,8 +63,10 @@ Plugin::Plugin(const PluginInfo& metadata) : info(metadata) {
     auto processing=active_?processor_->setProcessing(true):kResultFalse;
     processing_=active_ && (processing==kResultOk || processing==kNotImplemented);
     if (!processing_) throw std::runtime_error("VST3 activation failed: setActive="+std::to_string(activation)+", setProcessing="+std::to_string(processing));
+    latency_.store(processor_->getLatencySamples()); refreshMidiMapping();
 }
 Plugin::~Plugin() {
+    editor_.reset();
     if (view_) { view_->removed(); view_->setFrame(nullptr); view_.reset(); }
     if (window_) DestroyWindow(window_);
     if (processing_) processor_->setProcessing(false);
@@ -86,19 +90,50 @@ tresult PLUGIN_API Plugin::performEdit(ParamID id, ParamValue value) {
     editWrite_.store(w+1,std::memory_order_release); return kResultOk;
 }
 tresult PLUGIN_API Plugin::restartComponent(int32 flags) {
+    if(flags & kMidiCCAssignmentChanged) mappingDirty_.store(true);
     restart_.fetch_or(flags); return kResultOk;
 }
-void Plugin::note(int pitch, int velocity, bool on, int offset) {
+void Plugin::refreshMidiMapping() {
+    auto r=feedbackRead_.load(); auto w=feedbackWrite_.load(std::memory_order_acquire);
+    while(r!=w) { const auto edit=midiFeedback_[r++%midiFeedback_.size()]; if(controller_) controller_->setParamNormalized(edit.id,edit.value); } feedbackRead_.store(r,std::memory_order_release);
+
+    if(!mappingDirty_.exchange(false)) return;
+    auto mapping=U::cast<IMidiMapping>(controller_);
+    for(int channel=0;channel<16;++channel) for(int cc=0;cc<kCountCtrlNumber;++cc) {
+        ParamID id=kNoParamId;
+        if(mapping && mapping->getMidiControllerAssignment(0,int16(channel),CtrlNumber(cc),id)!=kResultOk) id=kNoParamId;
+        midiMapping_[channel][cc].store(id,std::memory_order_release);
+    }
+}
+void Plugin::midi(int status,int a,int b,int offset) {
+    int channel=status&15,kind=status&0xf0;
+    if(kind==0x90 || kind==0x80) { note(a,b,kind==0x90 && b!=0,offset,channel); return; }
+    if(kind==0xa0) { Event e{}; e.busIndex=0; e.sampleOffset=offset; e.flags=Event::kIsLive; e.type=Event::kPolyPressureEvent; e.polyPressure={int16(channel),int16(a),b/127.f,channel*128+a}; events_.addEvent(e); return; }
+    if(kind==0xb0 && (a==120 || a==123)) for(int p=0;p<128;++p) if(activeNotes_[channel][p]) note(p,0,false,offset,channel);
+    int number=kind==0xb0?a:kind==0xe0?kPitchBend:kind==0xd0?kAfterTouch:-1;
+    int value=kind==0xe0?(a|(b<<7)):kind==0xd0?a:b;
+    if(number>=0 && controlCount_<int(controls_.size())) controls_[controlCount_++]={number,channel,value,offset};
+}
+void Plugin::queueMidi(int status,int a,int b) {
+    auto w=uiMidiWrite_.load(); if(w-uiMidiRead_.load(std::memory_order_acquire)>=uiMidi_.size()) return;
+    uiMidi_[w%uiMidi_.size()]={status,a,b}; uiMidiWrite_.store(w+1,std::memory_order_release);
+}
+void Plugin::parameter(unsigned id,double value,int offset) { if(parameterCount_<int(parameterPoints_.size()) && std::isfinite(value)) parameterPoints_[parameterCount_++]={id,std::clamp(value,0.,1.),offset}; }
+void Plugin::note(int pitch, int velocity, bool on, int offset,int channel) {
+    if(pitch<0 || pitch>127 || channel<0 || channel>15) return;
+    activeNotes_[channel][pitch]=on;
     Event e{}; e.busIndex=0; e.sampleOffset=offset; e.flags=Event::kIsLive;
-    if (on) { e.type=Event::kNoteOnEvent; e.noteOn={0,int16(pitch),0,float(velocity)/127.f,0,pitch}; }
-    else { e.type=Event::kNoteOffEvent; e.noteOff={0,int16(pitch),0,pitch,0}; }
+    if (on) { e.type=Event::kNoteOnEvent; e.noteOn={int16(channel),int16(pitch),0,float(velocity)/127.f,0,channel*128+pitch}; }
+    else { e.type=Event::kNoteOffEvent; e.noteOff={int16(channel),int16(pitch),0,channel*128+pitch,0}; }
     events_.addEvent(e);
 }
-void Plugin::allOff() { for (int p=0;p<128;++p) note(p,0,false); }
+void Plugin::allOff() { for(int c=0;c<16;++c) { midi(0xb0|c,64,0); midi(0xb0|c,123,0); } }
 void Plugin::process(float* left,float* right,int frames,double beat,double bpm,bool playing) {
+    auto mr=uiMidiRead_.load(); auto mw=uiMidiWrite_.load(std::memory_order_acquire);
+    while(mr!=mw) { auto m=uiMidi_[mr++%uiMidi_.size()]; midi(m.status,m.a,m.b); } uiMidiRead_.store(mr,std::memory_order_release);
     const int flags = restart_.exchange(0);
     if(flags & kReloadComponent) throw std::runtime_error("Plugin requested component reload; reopen instance");
-    if(flags & kIoChanged) {
+    if(flags & (kIoChanged|kLatencyChanged)) {
         processor_->setProcessing(false); component_->setActive(false); processing_=active_=false;
         data_.unprepare();
         for(auto dir:{kInput,kOutput}) for(int32 i=0;i<component_->getBusCount(kAudio,dir);++i) { BusInfo bus{}; component_->getBusInfo(kAudio,dir,i,bus); component_->activateBus(kAudio,dir,i,bus.busType==kMain); }
@@ -107,12 +142,22 @@ void Plugin::process(float* left,float* right,int frames,double beat,double bpm,
         data_.processMode=kRealtime; data_.inputEvents=&events_; data_.outputEvents=&outputEvents_; data_.inputParameterChanges=&changes_; data_.outputParameterChanges=&outputChanges_;
         active_=component_->setActive(true)==kResultOk; auto result=processor_->setProcessing(true); processing_=active_ && (result==kResultOk||result==kNotImplemented);
         if(!processing_) throw std::runtime_error("Plugin reactivation failed");
+        latency_.store(processor_->getLatencySamples());
     }
     changes_.clearQueue(); outputChanges_.clearQueue(); outputEvents_.clear();
     auto r = editRead_.load(); const auto w = editWrite_.load(std::memory_order_acquire);
     while (r!=w) { const auto& edit=edits_[r++%edits_.size()]; int32 index=0,point=0;
         if (auto* q=changes_.addParameterData(edit.id,index)) q->addPoint(0,edit.value,point);
     } editRead_.store(r,std::memory_order_release);
+    for(int i=0;i<controlCount_;++i) {
+        const auto& cc=controls_[i]; auto id=midiMapping_[cc.channel][cc.number].load(std::memory_order_acquire);
+        if(id!=kNoParamId) { int32 index=0,point=0; double value=cc.value/double(cc.number==kPitchBend?16383:127); if(auto* q=changes_.addParameterData(id,index)) q->addPoint(cc.offset,value,point);
+            auto w=feedbackWrite_.load(); if(w-feedbackRead_.load(std::memory_order_acquire)<midiFeedback_.size()) { midiFeedback_[w%midiFeedback_.size()]={id,value}; feedbackWrite_.store(w+1,std::memory_order_release); }
+        }
+    } controlCount_=0;
+    for(int i=0;i<parameterCount_;++i) { auto p=parameterPoints_[i]; int32 index=0,point=0; if(auto* q=changes_.addParameterData(p.id,index)) q->addPoint(p.offset,p.value,point);
+        if(i+1==parameterCount_ || parameterPoints_[i+1].id!=p.id) { auto w=feedbackWrite_.load(); if(w-feedbackRead_.load(std::memory_order_acquire)<midiFeedback_.size()) { midiFeedback_[w%midiFeedback_.size()]={p.id,p.value}; feedbackWrite_.store(w+1,std::memory_order_release); } }
+    } parameterCount_=0;
     for (int b=0;b<data_.numInputs;++b) {
         auto& bus=data_.inputs[b]; bus.silenceFlags=0;
         for (int c=0;c<bus.numChannels;++c) {
@@ -131,6 +176,10 @@ void Plugin::process(float* left,float* right,int frames,double beat,double bpm,
     if (playing) ctx.state |= ProcessContext::kPlaying;
     data_.numSamples=frames; data_.processContext=&ctx;
     const auto result=processor_->process(data_); events_.clear();
+    if(data_.outputParameterChanges) for(int i=0;i<data_.outputParameterChanges->getParameterCount();++i) {
+        auto* q=data_.outputParameterChanges->getParameterData(i); if(!q || !q->getPointCount()) continue; int32 offset=0; double value=0;
+        if(q->getPoint(q->getPointCount()-1,offset,value)==kResultOk && std::isfinite(value)) { auto w=feedbackWrite_.load(); if(w-feedbackRead_.load(std::memory_order_acquire)<midiFeedback_.size()) { midiFeedback_[w%midiFeedback_.size()]={q->getParameterId(),value}; feedbackWrite_.store(w+1,std::memory_order_release); } }
+    }
     if (result != kResultOk) throw std::runtime_error("VST3 process failed");
     std::fill_n(left,frames,0.f); std::fill_n(right,frames,0.f);
     if (data_.numOutputs && data_.outputs[0].numChannels) {
@@ -140,62 +189,24 @@ void Plugin::process(float* left,float* right,int frames,double beat,double bpm,
         if (!(bus.silenceFlags & (uint64(1)<<c))) std::copy_n(bus.channelBuffers32[c],frames,right);
     }
 }
-LRESULT CALLBACK Plugin::windowProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
-    auto* p=reinterpret_cast<Plugin*>(GetWindowLongPtrW(h,GWLP_USERDATA));
-    if (msg==WM_NCCREATE) { p=static_cast<Plugin*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams); SetWindowLongPtrW(h,GWLP_USERDATA,LONG_PTR(p)); }
-    if (msg==WM_CLOSE) { ShowWindow(h,SW_HIDE); return 0; }
-    if(p && p->parameterList_ && msg==WM_COMMAND) {
-        if(LOWORD(w)==101 && HIWORD(w)==LBN_SELCHANGE) p->selectParameter();
-        if(LOWORD(w)==103 && HIWORD(w)==BN_CLICKED) p->applyParameter();
-        return 0;
+void Plugin::copyMidiOutput(PluginIPC& ipc) {
+    ipc.midiOutputCount=0;
+    for(int i=0;i<outputEvents_.getEventCount() && ipc.midiOutputCount<2048;++i) {
+        Event event{}; if(outputEvents_.getEvent(i,event)!=kResultOk || event.busIndex!=0) continue; PluginIPC::Event m{}; m.offset=event.sampleOffset;
+        if(event.type==Event::kNoteOnEvent) { m.status=0x90|(event.noteOn.channel&15); m.data1=event.noteOn.pitch; m.data2=int(std::round(event.noteOn.velocity*127)); }
+        else if(event.type==Event::kNoteOffEvent) { m.status=0x80|(event.noteOff.channel&15); m.data1=event.noteOff.pitch; }
+        else if(event.type==Event::kPolyPressureEvent) { m.status=0xa0|(event.polyPressure.channel&15); m.data1=event.polyPressure.pitch; m.data2=int(std::round(event.polyPressure.pressure*127)); }
+        else if(event.type==Event::kLegacyMIDICCOutEvent) { auto cc=event.midiCCOut; int number=cc.controlNumber; if(number<128) { m.status=0xb0|(cc.channel&15); m.data1=number; m.data2=cc.value&127; } else if(number==kPitchBend) { m.status=0xe0|(cc.channel&15); m.data1=cc.value&127; m.data2=cc.value2&127; } else if(number==kAfterTouch) { m.status=0xd0|(cc.channel&15); m.data1=cc.value&127; } else continue; }
+        else continue;
+        if(m.data1>=0 && m.data1<128 && m.data2>=0 && m.data2<128) ipc.midiOutput[ipc.midiOutputCount++]=m;
     }
-    if(p && p->parameterList_ && msg==WM_SIZE) { int width=LOWORD(l),height=HIWORD(l); MoveWindow(p->parameterList_,8,8,std::max(80,width-16),std::max(40,height-52),TRUE); MoveWindow(p->parameterValue_,8,std::max(48,height-36),std::max(40,width-120),26,TRUE); if(auto button=GetDlgItem(h,103)) MoveWindow(button,std::max(60,width-104),std::max(48,height-36),96,26,TRUE); }
-    if (p && p->view_ && msg==WM_SIZE) { ViewRect rect{0,0,int(LOWORD(l)),int(HIWORD(l))}; p->view_->onSize(&rect); }
-    return DefWindowProcW(h,msg,w,l);
 }
-bool Plugin::openEditor(std::string& error,bool forceGeneric) {
-    if (window_) { ShowWindow(window_,SW_SHOW); SetForegroundWindow(window_); return true; }
-    if (!controller_) { error="No edit controller"; return false; }
-    if(forceGeneric) return genericEditor(error);
-    view_=owned(controller_->createView(ViewType::kEditor));
-    if (!view_ || view_->isPlatformTypeSupported(kPlatformTypeHWND)!=kResultOk) { view_.reset(); return genericEditor(error); }
-    WNDCLASSW wc{}; wc.lpfnWndProc=windowProc; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=L"KinuVstEditor"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); RegisterClassW(&wc);
-    ViewRect rect{0,0,800,600}; view_->getSize(&rect);
-    RECT outer{0,0,rect.getWidth(),rect.getHeight()}; AdjustWindowRect(&outer,WS_OVERLAPPEDWINDOW,FALSE);
-    auto title=std::filesystem::u8path(info.name).wstring();
-    window_=CreateWindowW(wc.lpszClassName,title.c_str(),WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,outer.right-outer.left,outer.bottom-outer.top,nullptr,nullptr,wc.hInstance,this);
-    view_->setFrame(this);
-    if (view_->attached(window_,kPlatformTypeHWND)!=kResultOk) {
-        view_->setFrame(nullptr); view_.reset(); DestroyWindow(window_); window_=nullptr; error="Editor attachment failed"; return false;
-    }
-    view_->onSize(&rect); ShowWindow(window_,SW_SHOW); return true;
+bool Plugin::openEditor(std::string& error,bool generic) {
+    try { if(!controller_) { error="No edit controller"; return false; } if(!editor_) editor_=std::make_unique<PluginEditor>(*this,generic); else editor_->show(); return true; }
+    catch(const std::exception& e) { error=e.what(); return false; }
 }
-bool Plugin::genericEditor(std::string& error) {
-    WNDCLASSW wc{}; wc.lpfnWndProc=windowProc; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=L"KinuVstEditor"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); RegisterClassW(&wc);
-    auto title=std::filesystem::u8path(info.name+" / Parameters (0..1)").wstring();
-    window_=CreateWindowW(wc.lpszClassName,title.c_str(),WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,620,500,nullptr,nullptr,wc.hInstance,this);
-    if(!window_) { error="Parameter editor creation failed"; return false; }
-    parameterList_=CreateWindowW(L"LISTBOX",L"",WS_CHILD|WS_VISIBLE|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,8,8,588,400,window_,HMENU(101),wc.hInstance,nullptr);
-    parameterValue_=CreateWindowW(L"EDIT",L"0",WS_CHILD|WS_VISIBLE|WS_BORDER|ES_AUTOHSCROLL,8,420,480,26,window_,HMENU(102),wc.hInstance,nullptr);
-    CreateWindowW(L"BUTTON",L"Apply",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,496,420,96,26,window_,HMENU(103),wc.hInstance,nullptr);
-    for(int32 i=0;i<controller_->getParameterCount();++i) { ParameterInfo parameter{}; if(controller_->getParameterInfo(i,parameter)!=kResultOk) continue; parameterIds_.push_back(parameter.id); SendMessageW(parameterList_,LB_ADDSTRING,0,LPARAM(reinterpret_cast<const wchar_t*>(parameter.title))); }
-    if(!parameterIds_.empty()) { SendMessageW(parameterList_,LB_SETCURSEL,0,0); selectParameter(); }
-    ShowWindow(window_,SW_SHOW); return true;
-}
-void Plugin::selectParameter() {
-    int index=int(SendMessageW(parameterList_,LB_GETCURSEL,0,0)); if(index<0 || index>=int(parameterIds_.size())) return;
-    auto value=controller_->getParamNormalized(parameterIds_[index]); wchar_t text[64]{}; swprintf_s(text,L"%.8f",value); SetWindowTextW(parameterValue_,text);
-}
-void Plugin::applyParameter() {
-    int index=int(SendMessageW(parameterList_,LB_GETCURSEL,0,0)); if(index<0 || index>=int(parameterIds_.size())) return;
-    wchar_t text[64]{},*end=nullptr; GetWindowTextW(parameterValue_,text,64); double value=wcstod(text,&end); if(end==text || *end || !std::isfinite(value)) return;
-    value=std::clamp(value,0.,1.); auto id=parameterIds_[index]; controller_->setParamNormalized(id,value); beginEdit(id); performEdit(id,value); endEdit(id); selectParameter();
-}
-tresult PLUGIN_API Plugin::resizeView(IPlugView*,ViewRect* rect) {
-    if (!window_ || !rect) return kInvalidArgument;
-    RECT outer{0,0,rect->getWidth(),rect->getHeight()}; AdjustWindowRect(&outer,WS_OVERLAPPEDWINDOW,FALSE);
-    SetWindowPos(window_,nullptr,0,0,outer.right-outer.left,outer.bottom-outer.top,SWP_NOMOVE|SWP_NOZORDER); return kResultOk;
-}
+void Plugin::pumpEditor() { if(editor_) editor_->pump(); }
+tresult PLUGIN_API Plugin::resizeView(IPlugView*,ViewRect* rect) { if(!rect) return kInvalidArgument; if(editor_) editor_->resize(rect->getWidth(),rect->getHeight()); else if(window_) { editorWidth_=rect->getWidth(); editorHeight_=rect->getHeight(); RECT outer{0,0,std::max(620,editorWidth_),editorHeight_+100}; AdjustWindowRect(&outer,GetWindowLongW(window_,GWL_STYLE),FALSE); SetWindowPos(window_,nullptr,0,0,outer.right-outer.left,outer.bottom-outer.top,SWP_NOMOVE|SWP_NOZORDER); } else return kInvalidArgument; return kResultOk; }
 std::vector<unsigned char> Plugin::state() {
     MemoryStream stream; if (component_->getState(&stream)!=kResultOk) throw std::runtime_error("Plugin state save failed");
     const auto* p=reinterpret_cast<unsigned char*>(stream.getData()); return {p,p+stream.getSize()};
@@ -204,6 +215,7 @@ bool Plugin::state(const std::vector<unsigned char>& bytes) {
     MemoryStream stream(const_cast<unsigned char*>(bytes.data()),bytes.size());
     bool ok=component_->setState(&stream)==kResultOk;
     if (controller_) { stream.seek(0,IBStream::kIBSeekSet,nullptr); controller_->setComponentState(&stream); }
+    mappingDirty_.store(true); refreshMidiMapping();
     return ok;
 }
 }

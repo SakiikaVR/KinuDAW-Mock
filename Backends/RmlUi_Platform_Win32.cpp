@@ -221,6 +221,8 @@ bool RmlWin32::WindowProcedure(Rml::Context* context, TextInputMethodEditor_Win3
 	switch (message)
 	{
 	case WM_LBUTTONDOWN:
+		// Native VST children may own keyboard focus. Host controls need it back.
+		SetFocus(window_handle);
 		result = context->ProcessMouseButtonDown(0, RmlWin32::GetKeyModifierState());
 		SetCapture(window_handle);
 		break;

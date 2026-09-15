@@ -29,7 +29,7 @@ int wmain(int argc,wchar_t** argv) {
             std::ifstream input{std::filesystem::path(argv[2])}; json j; input>>j; Kinu::Plugin plugin(parse(j)); std::string error;
             if(!plugin.openEditor(error,argc>=4 && std::wstring(argv[3])==L"--generic")) throw std::runtime_error(error);
             auto deadline=GetTickCount64()+15000; float left[Kinu::Block]{},right[Kinu::Block]{};
-            while(GetTickCount64()<deadline) { MSG message{}; while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); } std::fill_n(left,Kinu::Block,.05f); std::fill_n(right,Kinu::Block,.05f); plugin.process(left,right,Kinu::Block,0,120,false); Sleep(3); }
+            while(GetTickCount64()<deadline) { plugin.pumpEditor(); plugin.refreshMidiMapping(); std::fill_n(left,Kinu::Block,.05f); std::fill_n(right,Kinu::Block,.05f); plugin.process(left,right,Kinu::Block,0,120,false); Sleep(3); }
             std::cout<<"Editor opened and processing continued\n"; return 0;
         }
         if (argc>=3 && std::wstring(argv[1])==L"--probe") {
@@ -58,6 +58,8 @@ int wmain(int argc,wchar_t** argv) {
         HANDLE done=OpenEventW(EVENT_MODIFY_STATE,FALSE,(std::wstring(argv[3])+L"-done").c_str());
         if(!owner) throw std::runtime_error("Owner not available");
         Kinu::Plugin plugin(parse(j)); std::mutex processing; std::atomic<bool> stop{false};
+        plugin.setIPC(ipc);
+        InterlockedExchange(&ipc->latency,LONG(plugin.latency()));
         InterlockedExchange(&ipc->phase,2);
         std::thread audio([&] {
             CoInitializeEx(nullptr,COINIT_MULTITHREADED); SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_HIGHEST);
@@ -65,8 +67,11 @@ int wmain(int argc,wchar_t** argv) {
                 if(InterlockedCompareExchange(&ipc->phase,0,0)==1) {
                     std::lock_guard<std::mutex> lock(processing);
                     int count=std::clamp(ipc->noteCount,0,2048),frames=std::clamp(ipc->frames,1,Kinu::Block);
-                    for(int i=0;i<count;++i) { auto e=ipc->notes[i]; plugin.note(std::clamp(e.pitch,0,127),std::clamp(e.velocity,0,127),e.on,std::clamp(e.offset,0,frames-1)); }
+                    for(int i=0;i<count;++i) { auto e=ipc->notes[i]; plugin.midi(e.status&255,std::clamp(e.data1,0,127),std::clamp(e.data2,0,127),std::clamp(e.offset,0,frames-1)); }
+                    for(int i=0;i<std::clamp(ipc->parameterCount,0,2048);++i) { auto p=ipc->parameters[i]; plugin.parameter(p.id,p.value,std::clamp(p.offset,0,frames-1)); }
                     plugin.process(ipc->left,ipc->right,frames,ipc->beat,ipc->bpm,ipc->playing);
+                    plugin.copyMidiOutput(*ipc);
+                    InterlockedExchange(&ipc->latency,LONG(plugin.latency()));
                     InterlockedExchange(&ipc->phase,2);
                     SetEvent(done);
                 } else if(wake) WaitForSingleObject(wake,50); else Sleep(1);
@@ -74,7 +79,9 @@ int wmain(int argc,wchar_t** argv) {
             CoUninitialize();
         });
         while(!InterlockedCompareExchange(&ipc->quit,0,0) && WaitForSingleObject(owner,0)==WAIT_TIMEOUT) {
-            MSG msg{}; while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+            plugin.pumpEditor();
+            plugin.refreshMidiMapping();
+            MSG msg{}; if(!plugin.hasEditor()) while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
             if(InterlockedExchange(&ipc->editor,0)) { std::string error; bool ok=plugin.openEditor(error); if(!ok) strncpy_s(ipc->error,error.c_str(),_TRUNCATE); InterlockedExchange(&ipc->editorResult,ok?1:-1); }
             if(auto cmd=InterlockedExchange(&ipc->stateCommand,0)) {
                 std::lock_guard<std::mutex> lock(processing); bool ok=false;

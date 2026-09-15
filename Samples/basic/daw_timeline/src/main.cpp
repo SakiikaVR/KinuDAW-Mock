@@ -61,6 +61,7 @@ int instrument_slot=0;
 bool ui_test=false;
 float ui_density=0;
 void AddVstEffect();
+std::string PluginSessionMetadata();
 void MockNotice(const Rml::String& text);
 void SyncAudio();
 void SaveProject(bool recovery = false);
@@ -71,7 +72,7 @@ void ImportAudioFile(int track,const std::filesystem::path& path,float beat);
 void PreparePiano(int track);
 void ToggleRecording();
 void FinishRecording();
-void RecordMidi(int track,int pitch,int velocity,bool on);
+void RecordMidi(int track,int pitch,int velocity,bool on,int channel=0);
 void ExternalMidi(DWORD packed);
 void PianoRelease();
 void AddVolumeAutomation();
@@ -103,6 +104,7 @@ struct ClipState {
 	float length_beats;
 	const Kinu::AudioFile* audio = nullptr;
 	std::vector<Kinu::Note> notes;
+	std::vector<Kinu::MidiControl> controls;
 	double source_offset = 0;
 	double pattern_length = 16;
 };
@@ -557,6 +559,11 @@ public:
 		else if(command=="audio-settings") AudioSettings(element);
 		else if(command=="vst-scan") StartPluginScan();
 		else if(command=="vst-effect-add") AddVstEffect();
+		else if(command.rfind("mixer-vst-",0)==0 && shared_volume) {
+            int slot=std::atoi(command.c_str()+command.find_last_of(':')+1); if(slot<0 || slot>3) return;
+            int request=command.rfind("mixer-vst-edit:",0)==0?kMixerEditRequest:command.rfind("mixer-vst-remove:",0)==0?kMixerRemoveRequest:kMixerBypassRequest;
+            if(InterlockedCompareExchange(shared_volume+request,mixer_selected_channel*4+slot+1,0)!=0) MockNotice("Previous VST3 request is pending");
+        }
 		else if(command.rfind("vst-effect-remove:",0)==0 && audio_engine) {
 			int t=std::atoi(command.c_str()+18),slot=std::atoi(command.c_str()+command.find_last_of(':')+1); std::string error;
 			if(t>=0 && t<track_count && slot>=0 && slot<4 && audio_engine->unloadPlugin(t,error,slot)) { if(!slot) { project_plugins[t]={}; cached_plugin_states[t].clear(); } else project_effects[t][slot-1]={}; DismissTrackFx(); }
@@ -1177,6 +1184,7 @@ int main(int argc, char** argv)
 	if(audio_engine && ui_test) {
 		ImportAudioFile(3,BinaryFolder()/"ui-tone.wav",0);
 		SaveClipUndo(); auto* midi=AddMockAudioClip(0,"MIDI",0,16,true); if(midi) midi->notes={{60,100,0,.5},{64,90,1,.5},{67,110,2,1}};
+        if(midi) { midi->notes[1].channel=3; midi->controls={{0xb0,1,64,0},{0xe3,0,64,1}}; }
 		custom_track_names[3]=u8"音声録音・日本語の長いトラック名を確認するテスト"; ApplyTrackOrder();
 		SetSelected(".track-header",Get("track-header-3")); AddVolumeAutomation();
 		volume_automation[track_count-1].points={{0,0},{4,-24},{8,0}}; RefreshAutomation(track_count-1);
@@ -1184,7 +1192,7 @@ int main(int argc, char** argv)
 		project_path=BinaryFolder()/"ui-test.kinu"; SaveProject();
 		if(midi) midi->start_beat=12;
 		LoadProjectFile(project_path);
-		bool roundTrip=false; for(const auto& c:clips) if(!c.notes.empty() && c.start_beat==0) roundTrip=true;
+		bool roundTrip=false; for(const auto& c:clips) if(c.notes.size()==3 && c.notes[1].channel==3 && c.controls.size()==2 && c.controls[1].status==0xe3 && c.start_beat==0) roundTrip=true;
 		{ std::ofstream report(BinaryFolder()/"ui-test-result.json"); report<<nlohmann::json({{"projectRoundTrip",roundTrip},{"clips",clips.size()},{"tracks",track_count},{"vitalLoaded",audio_engine->hasPlugin(0)}}).dump(2); }
 		OpenPianoWindow(0); OpenMixerWindow(); playing=true; looping=true; loop_end_beat=4; Get("play-button")->SetClass("active",true); SetText("play-label","PAUSE"); SyncAudio();
 	}
@@ -1214,7 +1222,7 @@ int main(int argc, char** argv)
 		const auto now = std::chrono::steady_clock::now();
 		const float delta_seconds = std::chrono::duration<float>(now - previous_frame).count();
 		previous_frame = now;
-		if(audio_engine) { ReadPianoEdits(); SyncAudio(); }
+		if(audio_engine) { ReadPianoEdits(); ReadPluginBindings(); SyncAudio(); }
 		if(audio_engine) RefreshAutomationGeometry();
 		if (playing && !scrubbing)
 		{

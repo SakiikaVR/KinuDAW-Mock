@@ -4,6 +4,7 @@
 #include "miniaudio.h"
 #include "AudioEngine.h"
 #include "PluginIPC.h"
+#include "DelayCompensation.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -28,7 +29,14 @@ struct AudioEngine::Effects {
     std::array<State,Tracks> tracks{};
     std::array<double,128> frequencies{};
 };
-AudioEngine::AudioEngine() : device_(std::make_unique<Device>()),effects_(std::make_unique<Effects>()) { for(int p=0;p<128;++p) effects_->frequencies[p]=440*std::pow(2.,(p-69)/12.); }
+struct AudioEngine::Compensation {
+    std::array<std::array<SampleDelay<float>,2>,Tracks> delays;
+    SampleDelay<double> beats;
+    std::array<unsigned,Tracks> previous{};
+    unsigned previousTotal=0;
+    void reset() { for(auto& track:delays) for(auto& side:track) side.reset(); beats.reset(); }
+};
+AudioEngine::AudioEngine() : device_(std::make_unique<Device>()),effects_(std::make_unique<Effects>()),compensation_(std::make_unique<Compensation>()) { for(int p=0;p<128;++p) effects_->frequencies[p]=440*std::pow(2.,(p-69)/12.); }
 AudioEngine::~AudioEngine() { std::string ignored; endRecording(ignored); stop(); if(device_->renderWake) CloseHandle(device_->renderWake); if(device_->initialized) ma_device_uninit(&device_->value); if(device_->contextInitialized) ma_context_uninit(&device_->context); }
 bool AudioEngine::start(std::string& error) {
     if(!device_->initialized) {
@@ -68,7 +76,8 @@ bool AudioEngine::start(std::string& error) {
         while(device_->rendering.load()) {
             unsigned w=device_->outputWrite.load(),r=device_->outputRead.load(std::memory_order_acquire);
             if(w-r+Block<=device_->queueFrames) {
-                render(buffer.data(),Block);
+                try { render(buffer.data(),Block); }
+                catch(...) { buffer.fill(0); reading_.store(-1); renderedBeats_.fill(beat_); playing_.store(false); }
                 for(unsigned i=0;i<Block;++i) { auto index=(w+i)%device_->outputBeats.size(); device_->outputRing[index*2]=buffer[i*2]; device_->outputRing[index*2+1]=buffer[i*2+1]; device_->outputBeats[index]=renderedBeats_[i]; }
                 device_->outputWrite.store(w+Block,std::memory_order_release);
             } else WaitForSingleObject(device_->renderWake,20);
@@ -160,9 +169,10 @@ bool AudioEngine::loadPlugin(int track,const PluginInfo& info,std::string& error
     if(track<0 || track>=Tracks || slot<0 || slot>3) return false;
     // Construct replacement first. A failed load leaves the previous worker usable.
     try {
-        auto next=std::make_unique<RemotePlugin>(info); next->synchronous(true,20); bool started=device_->started; stop();
+        auto next=std::make_unique<RemotePlugin>(info,track,slot); next->synchronous(true,20); bool started=device_->started; stop();
         if(slot==0) { plugins_[track]=std::move(next); pluginFault_[track].store(false); }
         else effectsPlugins_[track][slot-1]=std::move(next);
+        bypass_[track][slot].store(false); compensation_->reset();
         if(started) return start(error); return true;
     } catch(const std::exception& e) { error=e.what(); return false; }
 }
@@ -170,18 +180,71 @@ bool AudioEngine::editor(int track,std::string& error,int slot) { if(!hasPlugin(
 bool AudioEngine::unloadPlugin(int track,std::string& error,int slot) {
     if(!hasPlugin(track,slot)) return true;
     bool started=device_->started; stop(); (slot?effectsPlugins_[track][slot-1]:plugins_[track]).reset();
+    bypass_[track][slot].store(false); compensation_->reset();
     if(!slot) { held_[track].fill(false); pluginFault_[track].store(false); }
+    if(!slot) for(int c=0;c<16;++c) { keys_[track][c].fill(false); sustained_[track][c].fill(false); sustain_[track][c]=false; }
     return !started || start(error);
 }
 bool AudioEngine::hasPlugin(int track,int slot) const { return track>=0 && track<Tracks && slot>=0 && slot<=3 && bool(slot?effectsPlugins_[track][slot-1]:plugins_[track]); }
 bool AudioEngine::pluginHealthy(int track,int slot) const { return hasPlugin(track,slot) && (slot?effectsPlugins_[track][slot-1]->alive():!pluginFault_[track].load() && plugins_[track]->alive()); }
 unsigned AudioEngine::underruns() const { return device_->underruns.load(); }
 const PluginInfo* AudioEngine::pluginInfo(int track,int slot) const { return hasPlugin(track,slot)?&(slot?effectsPlugins_[track][slot-1]:plugins_[track])->info:nullptr; }
-void AudioEngine::midi(int track,int pitch,int velocity,bool on) {
-    if(track<0 || track>=Tracks || pitch<0 || pitch>127) return;
+void AudioEngine::midi(int track,int pitch,int velocity,bool on,int channel) { midiMessage(track,(on?0x90:0x80)|(channel&15),pitch,velocity); }
+void AudioEngine::midiMessage(int track,int status,int a,int b) {
+    if(track<0 || track>=Tracks || status<0x80 || status>=0xf0 || a<0 || a>127 || b<0 || b>127) return;
     auto w=midiWrite_.load(std::memory_order_relaxed);
     if(w-midiRead_.load(std::memory_order_acquire)>=midiQueue_.size()) { midiPanic_.store(true); return; }
-    midiQueue_[w%midiQueue_.size()]={track,pitch,velocity,on}; midiWrite_.store(w+1,std::memory_order_release);
+    midiQueue_[w%midiQueue_.size()]={track,status,a,b}; midiWrite_.store(w+1,std::memory_order_release);
+}
+void AudioEngine::bypassPlugin(int t,int s,bool value) { if(t>=0 && t<Tracks && s>=0 && s<4) { bypass_[t][s].store(value); midiPanic_.store(true); } }
+bool AudioEngine::pluginBypassed(int t,int s) const { return t>=0 && t<Tracks && s>=0 && s<4 && bypass_[t][s].load(); }
+unsigned AudioEngine::pluginLatency(int t,int s) const { if(!pluginHealthy(t,s) || pluginBypassed(t,s)) return 0; return (s?effectsPlugins_[t][s-1]:plugins_[t])->latency(); }
+unsigned AudioEngine::compensationFrames() const {
+    unsigned longest=0,master=0;
+    for(int t=0;t<Tracks;++t) { uint64_t total=0; for(int s=0;s<4;++s) total+=pluginLatency(t,s); if(total>MaxPathLatency) throw std::runtime_error("Plugin chain latency exceeds two seconds"); if(t==5) master=unsigned(total); else longest=std::max(longest,unsigned(total)); }
+    if(longest+master>MaxPathLatency) throw std::runtime_error("Total plugin latency exceeds two seconds"); return longest+master;
+}
+void AudioEngine::dispatchMidi(int t,int status,int a,int b,int offset) {
+    int c=status&15,kind=status&0xf0;
+    for(int s=0;s<4;++s) if(hasPlugin(t,s) && !pluginBypassed(t,s)) (s?effectsPlugins_[t][s-1]:plugins_[t])->midi(status,a,b,offset);
+    if(kind==0x90 && b) { keys_[t][c][a]=true; sustained_[t][c][a]=false; }
+    else if(kind==0x80 || kind==0x90) { keys_[t][c][a]=false; sustained_[t][c][a]=sustain_[t][c]; }
+    else if(kind==0xe0) bend_[t][c]=((a|(b<<7))-8192)/8192.*2.;
+    else if(kind==0xb0) {
+        if(a==64) { sustain_[t][c]=b>=64; if(b<64) sustained_[t][c].fill(false); }
+        if(a==120 || a==123) { keys_[t][c].fill(false); sustained_[t][c].fill(false); }
+        if(a==121) { sustain_[t][c]=false; sustained_[t][c].fill(false); bend_[t][c]=0; }
+    }
+    int first=(kind==0x90 || kind==0x80)?a:0,last=(kind==0x90 || kind==0x80)?a+1:128;
+    if(kind!=0x90 && kind!=0x80 && !(kind==0xb0 && (a==64 || a==120 || a==121 || a==123))) return;
+    for(int p=first;p<last;++p) { held_[t][p]=false; for(int ch=0;ch<16;++ch) held_[t][p]|=keys_[t][ch][p]||sustained_[t][ch][p]; }
+}
+void AudioEngine::panicAll() {
+    routedCount_=0;
+    for(int t=0;t<Tracks;++t) { for(int s=0;s<4;++s) if(hasPlugin(t,s)) (s?effectsPlugins_[t][s-1]:plugins_[t])->allOff(); held_[t].fill(false); for(int c=0;c<16;++c) { keys_[t][c].fill(false); sustained_[t][c].fill(false); sustain_[t][c]=false; } }
+}
+std::array<int,6> AudioEngine::pluginRouting(int t,int s) const { return hasPlugin(t,s)?(s?effectsPlugins_[t][s-1]:plugins_[t])->routing():std::array<int,6>{}; }
+void AudioEngine::pluginRouting(int t,int s,const std::array<int,6>& value) { if(hasPlugin(t,s)) (s?effectsPlugins_[t][s-1]:plugins_[t])->routing(value); }
+bool AudioEngine::pluginBindingRequest(int t,int s,int& automation,unsigned& id,double& value,std::string& name) { return hasPlugin(t,s) && (s?effectsPlugins_[t][s-1]:plugins_[t])->bindingRequest(automation,id,value,name); }
+bool AudioEngine::updateMidiRouting() {
+    constexpr int Nodes=Tracks*4; std::array<std::array<int,6>,Nodes> routes{}; std::array<bool,Nodes> active{};
+    for(int node=0;node<Nodes;++node) { int t=node/4,s=node%4; active[node]=pluginHealthy(t,s) && !pluginBypassed(t,s); if(active[node]) routes[node]=pluginRouting(t,s); }
+    if(routingSeen_ && routes!=routingValues_) panicAll(); routingValues_=routes; routingSeen_=true;
+    auto connected=[&](int a,int b) { return a!=b && active[a] && active[b] && routes[a][3] && routes[b][0] && routes[a][4]==routes[b][1] && routes[a][5]==routes[b][2]; };
+    std::array<int,Nodes> state{};
+    auto visit=[&](auto&& self,int node)->bool { if(state[node]==1) return false; if(state[node]==2) return true; state[node]=1; for(int dest=0;dest<Nodes;++dest) if(connected(node,dest) && !self(self,dest)) return false; state[node]=2; return true; };
+    bool valid=true; for(int node=0;node<Nodes && valid;++node) if(active[node]) valid=visit(visit,node);
+    for(int node=0;node<Nodes;++node) if(active[node]) (node%4?effectsPlugins_[node/4][node%4-1]:plugins_[node/4])->routingStatus(valid?1:-1);
+    if(!valid) { if(!routingBlocked_.exchange(true)) panicAll(); routedCount_=0; return false; } routingBlocked_.store(false);
+    for(int i=0;i<routedCount_;++i) { auto m=routedMidi_[i]; if(pluginHealthy(m.track,m.slot) && !pluginBypassed(m.track,m.slot) && pluginRouting(m.track,m.slot)[0]) (m.slot?effectsPlugins_[m.track][m.slot-1]:plugins_[m.track])->midi(m.status,m.a,m.b,m.offset); }
+    routedCount_=0; return true;
+}
+void AudioEngine::collectMidiOutput(int t,int s) {
+    auto& plugin=s?effectsPlugins_[t][s-1]:plugins_[t]; if(!plugin) return; auto output=plugin->routing(); if(!output[3]) return;
+    for(int destTrack=0;destTrack<Tracks;++destTrack) for(int destSlot=0;destSlot<4;++destSlot) {
+        if((destTrack==t && destSlot==s) || !pluginHealthy(destTrack,destSlot) || pluginBypassed(destTrack,destSlot)) continue; auto input=pluginRouting(destTrack,destSlot); if(!input[0] || input[1]!=output[4] || input[2]!=output[5]) continue;
+        for(int i=0;i<plugin->midiOutputCount();++i) { auto m=plugin->midiOutput()[i]; if(routedCount_>=int(routedMidi_.size())) { midiPanic_.store(true); return; } routedMidi_[routedCount_++]={destTrack,destSlot,(m.status&0xf0)|output[5],m.data1,m.data2,m.offset}; }
+    }
 }
 std::vector<unsigned char> AudioEngine::pluginState(int t,int slot) { return hasPlugin(t,slot)?(slot?effectsPlugins_[t][slot-1]:plugins_[t])->state():std::vector<unsigned char>{}; }
 bool AudioEngine::restorePluginState(int t,const std::vector<unsigned char>& bytes,int slot) { return hasPlugin(t,slot) && (slot?effectsPlugins_[t][slot-1]:plugins_[t])->state(bytes); }
@@ -190,16 +253,17 @@ void AudioEngine::render(float* output,unsigned frames) {
     do { slot=published_.load(); reading_.store(slot); } while(slot!=published_.load());
     const Scene& scene=scenes_[slot];
     const bool play=playing_.load(); const auto seek=seekVersion_.load(std::memory_order_acquire);
+    bool chaseControllers=seek!=appliedSeek_;
     if(seek!=appliedSeek_ || (wasPlaying_ && !play)) {
         beat_=seek_.load(); appliedSeek_=seek;
-        for(int t=0;t<Tracks;++t) { if(plugins_[t]) plugins_[t]->allOff(); held_[t].fill(false); }
+        compensation_->reset();
+        panicAll();
     }
     wasPlaying_=play;
     auto r=midiRead_.load(); auto w=midiWrite_.load(std::memory_order_acquire);
-    while(r!=w) { auto m=midiQueue_[r++%midiQueue_.size()]; held_[m.track][m.pitch]=m.on;
-        if(plugins_[m.track]) plugins_[m.track]->note(m.pitch,m.velocity,m.on);
+    while(r!=w) { auto m=midiQueue_[r++%midiQueue_.size()]; dispatchMidi(m.track,m.status,m.data1,m.data2);
     } midiRead_.store(r,std::memory_order_release);
-    if(midiPanic_.exchange(false)) for(int t=0;t<Tracks;++t) { held_[t].fill(false); if(plugins_[t]) plugins_[t]->allOff(); }
+    if(midiPanic_.exchange(false)) panicAll();
     bool solo=false; for(int t=0;t<Tracks;++t) if(t!=5) solo|=scene.channels[t].solo;
     const double step=std::clamp(scene.bpm,20.,300.)/(60.*48000.);
     unsigned done=0;
@@ -208,11 +272,34 @@ void AudioEngine::render(float* output,unsigned frames) {
         double end=scene.loop?scene.loopEnd:scene.end;
         if(blockPlay) n=std::min(n,std::max(1,int(std::ceil((end-beat_)/step))));
         std::array<float,Block> sumL{},sumR{};
+        bool midiRouting=updateMidiRouting();
+        std::array<unsigned,Tracks> pathLatency{}; unsigned longest=0;
+        for(int t=0;t<Tracks;++t) { uint64_t total=0; for(int s=0;s<4;++s) { unsigned latency=pluginLatency(t,s); if(total+latency>MaxPathLatency) { if(exporting_) throw std::runtime_error("Plugin chain latency exceeds two seconds"); bypass_[t][s].store(true); } else total+=latency; } pathLatency[t]=unsigned(total); if(t!=5) longest=std::max(longest,pathLatency[t]); }
+        unsigned totalLatency=longest+pathLatency[5]; if(totalLatency>MaxPathLatency) { if(exporting_) throw std::runtime_error("Total plugin latency exceeds two seconds"); for(int s=0;s<4;++s) bypass_[5][s].store(true); pathLatency[5]=0; totalLatency=longest; }
+        if(compensation_->previous!=pathLatency || compensation_->previousTotal!=totalLatency) { compensation_->reset(); compensation_->previous=pathLatency; compensation_->previousTotal=totalLatency; }
+        for(int ai=0;ai<scene.parameterCount;++ai) { const auto& curve=scene.parameters[ai]; if(!curve.count || !pluginHealthy(curve.track,curve.slot) || pluginBypassed(curve.track,curve.slot)) continue;
+            auto& p=curve.slot?effectsPlugins_[curve.track][curve.slot-1]:plugins_[curve.track];
+            unsigned preceding=curve.track==5?longest:0; for(int s=0;s<curve.slot;++s) preceding+=pluginLatency(curve.track,s);
+            for(int i=0;i<n;i+=8) { double when=beat_+(i-double(preceding))*step; auto a=curve.points[0],b=a; for(int point=1;point<curve.count;++point) { b=curve.points[point]; if(b.beat>=when) break; a=b; }
+                double db=b.beat>a.beat?a.db+(b.db-a.db)*std::clamp((when-a.beat)/(b.beat-a.beat),0.,1.):a.db; p->parameter(curve.id,std::clamp((db+48)/54,0.,1.),i);
+            }
+        }
         for(int t=0;t<Tracks;++t) {
             if(t==5) continue;
             std::array<float,Block> left{},right{};
-            struct Scheduled { int pitch,offset; bool on; };
+            struct Scheduled { int status,a,b,offset; };
             std::array<Scheduled,2048> schedule{}; int scheduleCount=0;
+            if(chaseControllers && blockPlay) {
+                struct Chase { double when=-1; int status=0,a=0,b=0; };
+                std::array<std::array<Chase,130>,16> latest{};
+                for(int ci=0;ci<scene.count;++ci) { const auto& clip=scene.clips[ci]; if(clip.track!=t || clip.audio || beat_<clip.beat || beat_>=clip.beat+clip.length) continue;
+                    double pattern=std::max(.25,clip.pattern);
+                    for(int mi=0;mi<clip.controlCount;++mi) { auto m=clip.controls[mi]; int kind=m.status&0xf0; int number=kind==0xb0?m.data1:kind==0xe0?129:kind==0xd0?128:-1; if(number<0 || (kind==0xb0 && m.data1>=120)) continue;
+                        int repeat=int(std::floor((beat_-clip.beat-m.beat)/pattern)); if(repeat<0) continue; double when=clip.beat+repeat*pattern+m.beat; auto& entry=latest[m.status&15][number]; if(when>entry.when && when<beat_-1e-10) entry={when,m.status,m.data1,m.data2};
+                    }
+                }
+                for(auto& channel:latest) for(auto& cc:channel) if(cc.when>=0) dispatchMidi(t,cc.status,cc.a,cc.b);
+            }
             if(blockPlay) for(int ci=0;ci<scene.count;++ci) {
                 const auto& clip=scene.clips[ci]; if(clip.track!=t) continue;
                 for(int i=0;i<n;++i) {
@@ -236,32 +323,41 @@ void AudioEngine::render(float* output,unsigned frames) {
                             double when=kind?off:on;
                             if(when>=beat_-1e-10 && when<beat_+n*step-1e-10) {
                                 int offset=std::clamp(int(std::round((when-beat_)/step)),0,n-1);
-                                if(plugins_[t]) plugins_[t]->note(note.pitch,note.velocity,!kind,offset);
-                                else if(scheduleCount<int(schedule.size())) schedule[scheduleCount++]={note.pitch,offset,!kind};
+                                if(scheduleCount<int(schedule.size())) schedule[scheduleCount++]={(kind?0x80:0x90)|(note.channel&15),note.pitch,note.velocity,offset};
                             }
                         }
                     }
                 }
+                if(!clip.audio) for(int ci=0;ci<clip.controlCount;++ci) {
+                    auto control=clip.controls[ci]; double pattern=std::max(.25,clip.pattern);
+                    int first=std::max(0,int(std::floor((beat_-clip.beat-control.beat)/pattern)));
+                    for(int repeat=first;repeat<=first+1;++repeat) { double when=clip.beat+repeat*pattern+control.beat;
+                        if(when<clip.beat+clip.length && when>=beat_-1e-10 && when<beat_+n*step-1e-10 && scheduleCount<int(schedule.size())) schedule[scheduleCount++]={control.status,control.data1,control.data2,std::clamp(int(std::round((when-beat_)/step)),0,n-1)};
+                    }
+                }
             }
-            if(plugins_[t] && !pluginFault_[t].load()) {
+            std::stable_sort(schedule.begin(),schedule.begin()+scheduleCount,[](const Scheduled& a,const Scheduled& b) { return a.offset<b.offset; });
+            if(plugins_[t]) for(int e=0;e<scheduleCount;++e) dispatchMidi(t,schedule[e].status,schedule[e].a,schedule[e].b,schedule[e].offset);
+            if(plugins_[t] && !pluginFault_[t].load() && !pluginBypassed(t,0)) {
                 try { plugins_[t]->process(left.data(),right.data(),n,beat_,scene.bpm,blockPlay); }
                 catch(...) { pluginFault_[t].store(true); if(exporting_) throw; }
+                if(midiRouting) collectMidiOutput(t,0);
             }
             else if(!plugins_[t]) {
-                std::sort(schedule.begin(),schedule.begin()+scheduleCount,[](const Scheduled& a,const Scheduled& b) { return a.offset<b.offset || (a.offset==b.offset && !a.on && b.on); });
                 int event=0;
                 bool sound=false; for(bool held:held_[t]) sound|=held;
                 for(int i=0;i<n;++i) {
-                    bool changed=false; while(event<scheduleCount && schedule[event].offset<=i) { auto e=schedule[event++]; held_[t][e.pitch]=e.on; changed=true; }
+                    bool changed=false; while(event<scheduleCount && schedule[event].offset<=i) { auto e=schedule[event++]; dispatchMidi(t,e.status,e.a,e.b,e.offset); changed=true; }
                     if(changed) { sound=false; for(bool held:held_[t]) sound|=held; } if(!sound) continue;
                     for(int pitch=0;pitch<128;++pitch) if(held_[t][pitch]) {
-                        double freq=effects_->frequencies[pitch]; float v=float(std::sin(phases_[t][pitch])*.025);
+                        int c=0; while(c<15 && !keys_[t][c][pitch] && !sustained_[t][c][pitch]) ++c;
+                        double freq=effects_->frequencies[pitch]*std::pow(2.,bend_[t][c]/12); float v=float(std::sin(phases_[t][pitch])*.025);
                         phases_[t][pitch]=std::fmod(phases_[t][pitch]+freq*6.283185307/48000,6.283185307); left[i]+=v; right[i]+=v;
                     }
                 }
             }
             auto channel=scene.channels[t]; bool audible=!channel.mute && (!solo || channel.solo);
-            for(auto& p:effectsPlugins_[t]) if(p && p->alive()) { try { p->process(left.data(),right.data(),n,beat_,scene.bpm,blockPlay); } catch(...) { if(exporting_) throw; } }
+            for(int s=0;s<3;++s) if(auto& p=effectsPlugins_[t][s]; p && p->alive() && !pluginBypassed(t,s+1)) { try { p->process(left.data(),right.data(),n,beat_,scene.bpm,blockPlay); if(midiRouting) collectMidiOutput(t,s+1); } catch(...) { if(exporting_) throw; } }
             auto& fx=effects_->tracks[t];
             for(int i=0;i<n;++i) {
                 float values[2]={left[i],right[i]};
@@ -276,27 +372,34 @@ void AudioEngine::render(float* output,unsigned frames) {
             for(int i=0;i<n;++i) {
                 float automation=1;
                 if(channel.automationCount) {
-                    double when=beat_+i*step; auto a=channel.automation[0],b=a;
+                    double when=beat_+(i-double(pathLatency[t]))*step; auto a=channel.automation[0],b=a;
                     for(int p=1;p<channel.automationCount;++p) { b=channel.automation[p]; if(b.beat>=when) break; a=b; }
                     float db=b.beat>a.beat?a.db+(b.db-a.db)*float(std::clamp((when-a.beat)/(b.beat-a.beat),0.,1.)):a.db;
                     automation=std::pow(10.f,db/20.f);
                 }
-                float l=std::isfinite(left[i])?left[i]*lg*automation:0,r=std::isfinite(right[i])?right[i]*rg*automation:0; sumL[i]+=l; sumR[i]+=r; peak=std::max({peak,std::abs(l),std::abs(r)});
+                float l=std::isfinite(left[i])?left[i]*lg*automation:0,r=std::isfinite(right[i])?right[i]*rg*automation:0;
+                l=compensation_->delays[t][0].push(l,longest-pathLatency[t]); r=compensation_->delays[t][1].push(r,longest-pathLatency[t]);
+                sumL[i]+=l; sumR[i]+=r; peak=std::max({peak,std::abs(l),std::abs(r)});
             }
             peaks_[t].store(peak);
         }
+        for(int s=0;s<4;++s) if(hasPlugin(5,s) && pluginHealthy(5,s) && !pluginBypassed(5,s)) { auto& p=s?effectsPlugins_[5][s-1]:plugins_[5]; try { p->process(sumL.data(),sumR.data(),n,beat_,scene.bpm,blockPlay); if(midiRouting) collectMidiOutput(5,s); } catch(...) { if(!s) pluginFault_[5].store(true); if(exporting_) throw; } }
         float master=scene.channels[5].mute?0:scene.channels[5].gain,peak=0;
         for(int i=0;i<n;++i) {
-            float l=std::clamp(sumL[i]*master,-1.f,1.f),r=std::clamp(sumR[i]*master,-1.f,1.f);
+            float automation=1; const auto& channel=scene.channels[5];
+            if(channel.automationCount) { double when=beat_+(i-double(totalLatency))*step; auto a=channel.automation[0],b=a; for(int p=1;p<channel.automationCount;++p) { b=channel.automation[p]; if(b.beat>=when) break; a=b; } double db=b.beat>a.beat?a.db+(b.db-a.db)*std::clamp((when-a.beat)/(b.beat-a.beat),0.,1.):a.db; automation=float(std::pow(10.,db/20)); }
+            float l=std::clamp(sumL[i]*master*automation,-1.f,1.f),r=std::clamp(sumR[i]*master*automation,-1.f,1.f);
             output[(done+i)*2]=l; output[(done+i)*2+1]=r; peak=std::max({peak,std::abs(l),std::abs(r)});
             if(done+i<Block) { waveform_[0][done+i].store(l,std::memory_order_relaxed); waveform_[1][done+i].store(r,std::memory_order_relaxed); }
-            if(done+i<Block) renderedBeats_[done+i]=blockPlay?beat_+i*step:beat_;
+            auto audibleBeat=compensation_->beats.push(blockPlay?beat_+i*step:beat_,totalLatency);
+            if(done+i<Block) renderedBeats_[done+i]=audibleBeat;
         } peaks_[5].store(peak); done+=n;
+        chaseControllers=false;
         if(blockPlay) {
             beat_+=n*step;
             if(beat_>=end-1e-9) {
-                for(int t=0;t<Tracks;++t) { if(plugins_[t]) plugins_[t]->allOff(); held_[t].fill(false); }
-                if(scene.loop) beat_=scene.loopStart; else beat_=scene.end;
+                panicAll();
+                if(scene.loop) { beat_=scene.loopStart; chaseControllers=true; } else beat_=scene.end;
             }
         }
     }
@@ -323,7 +426,12 @@ bool AudioEngine::exportWav(const std::filesystem::path& path,double beats,std::
     out.write("RIFF",4); out.write(reinterpret_cast<char*>(&size),4); out.write("WAVEfmt ",8); out.write(reinterpret_cast<char*>(&fmt),4); out.write(reinterpret_cast<char*>(&code),2); out.write(reinterpret_cast<char*>(&channels),2); out.write(reinterpret_cast<char*>(&rate),4); out.write(reinterpret_cast<char*>(&byteRate),4); out.write(reinterpret_cast<char*>(&align),2); out.write(reinterpret_cast<char*>(&bits),2); out.write("data",4); out.write(reinterpret_cast<char*>(&data),4);
     bool ok=false;
     exporting_=true;
-    try { std::array<float,Block*2> buffer{}; for(uint64_t n=0;n<count;n+=Block) { auto frames=unsigned(std::min<uint64_t>(Block,count-n)); render(buffer.data(),frames); out.write(reinterpret_cast<char*>(buffer.data()),frames*8); }
+    try { unsigned latency=compensationFrames(); std::array<float,Block*2> buffer{};
+        for(uint64_t n=0;n<count+latency;n+=Block) { auto frames=unsigned(std::min<uint64_t>(Block,count+latency-n)); render(buffer.data(),frames);
+            if(compensationFrames()!=latency) throw std::runtime_error("Plugin latency changed during export; retry with stable settings");
+            unsigned skip=n<latency?unsigned(std::min<uint64_t>(frames,latency-n)):0;
+            if(frames>skip) out.write(reinterpret_cast<char*>(buffer.data()+skip*2),(frames-skip)*8);
+        }
         out.flush(); ok=bool(out); out.close();
         if(ok) ok=MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
         if(!ok) error="Export write failed; previous file preserved";

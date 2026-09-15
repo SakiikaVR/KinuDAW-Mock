@@ -1,18 +1,14 @@
-<rml><head><title>Kinu VST3 Mock</title><link type="text/rcss" href="../../../assets/rml.rcss"/><link type="text/rcss" href="plugin.rcss"/></head>
+<rml><head><title>KinuDAW VST3</title><link type="text/rcss" href="../../../assets/rml.rcss"/><link type="text/rcss" href="plugin.rcss"/></head>
 <body onmousemove="plugin-param-move" onmouseup="plugin-param-end" onmouseleave="plugin-param-end">
 <div id="plugin-app">
 <nav><button id="plugin-tab-0" onclick="plugin-tab:0">GUI</button><button id="plugin-tab-1" onclick="plugin-tab:1">MIDI</button><button id="plugin-tab-2" onclick="plugin-tab:2">パラメーター</button><button id="plugin-pin" onclick="plugin-pin" title="最前面に固定">↑</button></nav>
-<header><b id="plugin-track-title">TRACK</b><span>VST3 UIモック</span></header>
+<header><b id="plugin-track-title">TRACK</b><span>VST3</span></header>
 <main>
-<section id="plugin-page-0" class="plugin-page gui-page">
-<div class="gui-brand"><b>KINU</b><span>MULTIBAND PROCESSOR</span><small>DEMO PLUG-IN</small></div>
-<div class="gui-controls"><div><b>DEPTH</b><button onclick="plugin-gui:0"><i></i></button><span id="plugin-gui-value-0">100.0 %</span></div><div><b>TIME</b><button onclick="plugin-gui:1"><i></i></button><span id="plugin-gui-value-1">50.0 %</span></div><div><b>IN GAIN</b><button onclick="plugin-gui:2"><i></i></button><span id="plugin-gui-value-2">50.0 %</span></div><div><b>OUT GAIN</b><button onclick="plugin-gui:3"><i></i></button><span id="plugin-gui-value-3">50.0 %</span></div></div>
-<div class="gui-bands"><div><b>H</b><i class="band-fill high"></i><span>HIGH</span></div><div><b>M</b><i class="band-fill mid"></i><span>MID</span></div><div><b>L</b><i class="band-fill low"></i><span>LOW</span></div></div>
-<p>GUIのノブはクリックで変更できます。<br/>音声処理・VST3の読み込みは行いません。</p></section>
+<section id="plugin-page-0" class="plugin-page gui-page"><div id="plugin-native-surface"><p>このVST3にはGUIがありません。パラメータータブから操作できます。</p></div></section>
 <section id="plugin-page-1" class="plugin-page midi-page"><b>内部MIDIルーティング</b><p>Loop MIDI / 同じPORT・CHで接続</p>
 <div class="routing-card"><div class="routing-title"><b>INPUT</b><button id="plugin-route-on-0" onclick="plugin-route-toggle:0">OFF</button></div><div class="route-row"><span>PORT</span><button onclick="plugin-route-step:1:-1">−</button><b id="plugin-port-0">00</b><button onclick="plugin-route-step:1:1">＋</button></div><div class="route-row"><span>CH</span><button onclick="plugin-route-step:2:-1">−</button><b id="plugin-ch-0">01</b><button onclick="plugin-route-step:2:1">＋</button></div></div>
 <div class="routing-card"><div class="routing-title"><b>OUTPUT</b><button id="plugin-route-on-1" onclick="plugin-route-toggle:1">OFF</button></div><div class="route-row"><span>PORT</span><button onclick="plugin-route-step:4:-1">−</button><b id="plugin-port-1">00</b><button onclick="plugin-route-step:4:1">＋</button></div><div class="route-row"><span>CH</span><button onclick="plugin-route-step:5:-1">−</button><b id="plugin-ch-1">01</b><button onclick="plugin-route-step:5:1">＋</button></div></div>
 <pre id="plugin-connections">INPUT: OFF
-OUTPUT: OFF</pre><small>外部MIDIデバイスには接続しません。</small></section>
+OUTPUT: OFF</pre><small>内部MIDI接続 / 循環接続を検出した場合は送信を停止します。</small></section>
 <section id="plugin-page-2" class="plugin-page parameter-page"><input id="plugin-search" type="text" maxlength="80" placeholder="パラメーターを検索" oninput="plugin-search" onchange="plugin-search"/><p>Automationを選択して接続 / ＋でトラックを作成</p><div id="plugin-param-scroll"><div id="plugin-parameters"></div><p id="plugin-param-empty">一致するパラメーターがありません</p></div></section>
-</main><footer>UIモック / 設定はセッション中保持</footer></div></body></rml>
+</main><footer id="plugin-status">VST3</footer></div></body></rml>

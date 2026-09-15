@@ -24,4 +24,7 @@ p { margin: 6dp 0 10dp; color: #7798a9; font-size: 10dp; line-height: 18dp; }
 .binding-row { display: flex; height: 26dp; }.binding-row select { display: block; flex: 1 1 0; min-width: 0; height: 26dp; padding: 3dp 5dp; border: 1dp #334b5c; background: #101e2a; color: #a4c8d6; font-size: 9dp; line-height: 18dp; }.binding-row button { flex: 0 0 25dp; width: 25dp; height: 26dp; margin-left: 4dp; line-height: 24dp; color: #7ce3d4; }
 select selectvalue { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }select selectarrow { width: 12dp; height: 16dp; background: #345367; }select selectbox { padding: 3dp; border: 1dp #415f71; background: #101f2b; }select option { display: block; padding: 3dp; line-height: 19dp; }select option:hover, select option:checked { color: #89f1df; background: #23434a; }
 #plugin-param-empty { display: none; padding: 15dp; text-align: center; }
+#plugin-page-0 { padding: 0; overflow: hidden; }
+#plugin-native-surface { flex: 1 1 0; min-height: 0; min-width: 0; width: 100%; height: 100%; background: #090e14; }
+.parameter-card.readonly .parameter-rail { cursor: arrow; }
 scrollbarvertical { width: 12dp; background: #111d28; }scrollbarvertical slidertrack { width: 12dp; }scrollbarvertical sliderbar { width: 10dp; min-height: 24dp; border-radius: 3dp; background: #3c5b6d; }scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc { height: 0; }

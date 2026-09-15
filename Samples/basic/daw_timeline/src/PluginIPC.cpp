@@ -12,7 +12,7 @@ static std::wstring quote(const std::wstring& s) {
         result.append(c==L'"'?slashes*2+1:slashes,L'\\'); result+=c; slashes=0;
     } result.append(slashes*2,L'\\'); return result+L"\"";
 }
-RemotePlugin::RemotePlugin(const PluginInfo& metadata) : info(metadata) {
+RemotePlugin::RemotePlugin(const PluginInfo& metadata,int track,int slot) : info(metadata) {
     try {
     wchar_t executable[32768]{}; GetModuleFileNameW(nullptr,executable,32768);
     auto worker=std::filesystem::path(executable).parent_path()/L"kinu_vst_worker.exe";
@@ -29,6 +29,7 @@ RemotePlugin::RemotePlugin(const PluginInfo& metadata) : info(metadata) {
     if (mapping_) ipc_=static_cast<PluginIPC*>(MapViewOfFile(mapping_,FILE_MAP_ALL_ACCESS,0,0,sizeof(PluginIPC)));
     if (!ipc_) throw std::runtime_error("Cannot create plugin IPC");
     new(ipc_) PluginIPC{};
+    ipc_->hostTrack=track; ipc_->hostSlot=slot; ipc_->owner=GetCurrentProcessId();
     wcsncpy_s(ipc_->statePath,statePath_.c_str(),_TRUNCATE);
     auto cmd=quote(worker.wstring())+L" --worker "+quote(config.wstring())+L" "+quote(mappingName)+L" "+std::to_wstring(GetCurrentProcessId());
     STARTUPINFOW startup{}; startup.cb=sizeof(startup); PROCESS_INFORMATION process{};
@@ -65,11 +66,19 @@ void RemotePlugin::shutdown() noexcept {
     std::filesystem::remove(configPath_,ec);
 }
 bool RemotePlugin::alive() const { return process_ && WaitForSingleObject(process_,0)==WAIT_TIMEOUT; }
-void RemotePlugin::note(int pitch,int velocity,bool on,int offset) {
-    if (count_<int(pending_.size())) pending_[count_++]={pitch,velocity,offset,on};
+void RemotePlugin::note(int pitch,int velocity,bool on,int offset,int channel) {
+    midi((on?0x90:0x80)|(channel&15),pitch,velocity,offset);
 }
-void RemotePlugin::allOff() { for(int i=0;i<128;++i) note(i,0,false); }
+void RemotePlugin::midi(int status,int a,int b,int offset) {
+    if(count_<int(pending_.size())) pending_[count_++]={status,a,b,offset};
+}
+void RemotePlugin::parameter(unsigned id,double value,int offset) { if(parameterCount_<int(parameters_.size())) parameters_[parameterCount_++]={id,value,offset}; }
+std::array<int,6> RemotePlugin::routing() const { std::array<int,6> result{}; for(int i=0;i<6;++i) result[i]=InterlockedCompareExchange(ipc_->route+i,0,0); return result; }
+void RemotePlugin::routing(const std::array<int,6>& values) { for(int i=0;i<6;++i) InterlockedExchange(ipc_->route+i,values[i]); }
+bool RemotePlugin::bindingRequest(int& track,unsigned& param,double& value,std::string& name) { if(!InterlockedCompareExchange(&ipc_->bindRequest,0,0)) return false; track=ipc_->bindTrack; param=unsigned(ipc_->bindParam); value=ipc_->bindValue; name=ipc_->bindName; InterlockedExchange(&ipc_->bindRequest,0); return true; }
+void RemotePlugin::allOff() { count_=0; for(int c=0;c<16;++c) { midi(0xb0|c,64,0); midi(0xb0|c,123,0); } }
 void RemotePlugin::process(float* left,float* right,int frames,double beat,double bpm,bool playing) {
+    outputCount_=0;
     // Preserve unprocessed input for effects when the worker misses its deadline.
     // Instruments receive zero input. No process wait, IPC lock, allocation, or DLL call.
     if (!alive()) { count_=0; if(synchronous_) throw std::runtime_error("Plugin worker exited during export"); return; }
@@ -84,9 +93,10 @@ void RemotePlugin::process(float* left,float* right,int frames,double beat,doubl
         std::copy_n(left,frames,ipc_->left); std::copy_n(right,frames,ipc_->right);
         ipc_->frames=frames; ipc_->beat=beat; ipc_->bpm=bpm; ipc_->playing=playing;
         ipc_->noteCount=count_; std::copy_n(pending_.data(),count_,ipc_->notes); count_=0;
+        ipc_->parameterCount=parameterCount_; std::copy_n(parameters_.data(),parameterCount_,ipc_->parameters); parameterCount_=0;
         ResetEvent(done_); InterlockedExchange(&ipc_->phase,1); SetEvent(wake_); WaitForSingleObject(done_,timeout_);
         if(!alive() || InterlockedCompareExchange(&ipc_->phase,0,0)!=2) { TerminateProcess(process_,2); throw std::runtime_error("Plugin processing failed"); }
-        std::copy_n(ipc_->left,frames,left); std::copy_n(ipc_->right,frames,right); InterlockedExchange(&ipc_->phase,0); return;
+        std::copy_n(ipc_->left,frames,left); std::copy_n(ipc_->right,frames,right); outputCount_=std::clamp(ipc_->midiOutputCount,0,2048); std::copy_n(ipc_->midiOutput,outputCount_,output_.data()); InterlockedExchange(&ipc_->phase,0); return;
     }
     LONG phase=InterlockedCompareExchange(&ipc_->phase,0,0);
     if (phase==1) {
@@ -94,10 +104,11 @@ void RemotePlugin::process(float* left,float* right,int frames,double beat,doubl
         return;
     }
     std::array<float,Block> inL{},inR{}; std::copy_n(left,frames,inL.data()); std::copy_n(right,frames,inR.data());
-    if (phase==2) { std::copy_n(ipc_->left,frames,left); std::copy_n(ipc_->right,frames,right); }
+    if (phase==2) { std::copy_n(ipc_->left,frames,left); std::copy_n(ipc_->right,frames,right); outputCount_=std::clamp(ipc_->midiOutputCount,0,2048); std::copy_n(ipc_->midiOutput,outputCount_,output_.data()); }
     std::copy_n(inL.data(),frames,ipc_->left); std::copy_n(inR.data(),frames,ipc_->right);
     ipc_->frames=frames; ipc_->beat=beat; ipc_->bpm=bpm; ipc_->playing=playing;
     ipc_->noteCount=count_; std::copy_n(pending_.data(),count_,ipc_->notes); count_=0;
+    ipc_->parameterCount=parameterCount_; std::copy_n(parameters_.data(),parameterCount_,ipc_->parameters); parameterCount_=0;
     requested_=GetTickCount64(); InterlockedExchange(&ipc_->phase,1); SetEvent(wake_);
 }
 bool RemotePlugin::openEditor(std::string& error) {

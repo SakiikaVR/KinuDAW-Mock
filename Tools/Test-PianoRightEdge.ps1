@@ -2,7 +2,7 @@
 # Run against --ui-test at 100% density and the default piano scroll position.
 param([int]$OwnerId,[int]$PianoId)
 $ErrorActionPreference='Stop'
-$mapping=[IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting("Local\KinuPiano-v2-$OwnerId")
+$mapping=[IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting("Local\KinuPiano-v3-$OwnerId")
 $view=$mapping.CreateViewAccessor()
 try {
     foreach($test in @(@{y=397;pitch=60},@{y=374;pitch=62},@{y=383;pitch=60})) {

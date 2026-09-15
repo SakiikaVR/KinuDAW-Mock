@@ -127,6 +127,13 @@ void UpdateMockTracks()
 #if defined RMLUI_PLATFORM_WIN32
 	if (shared_volume)
 	{
+        for(int request:{kMixerEditRequest,kMixerRemoveRequest,kMixerBypassRequest}) {
+            int encoded=InterlockedExchange(shared_volume+request,0)-1; if(encoded<0) continue; int t=encoded/4,s=encoded%4;
+            if(t>=track_count || !audio_engine || !audio_engine->hasPlugin(t,s)) continue; std::string error;
+            if(request==kMixerEditRequest) { if(!audio_engine->editor(t,error,s)) MockNotice(error); }
+            else if(request==kMixerBypassRequest) audio_engine->bypassPlugin(t,s,!audio_engine->pluginBypassed(t,s));
+            else if(audio_engine->unloadPlugin(t,error,s)) { if(!s) { project_plugins[t]={}; cached_plugin_states[t].clear(); } else project_effects[t][s-1]={}; } else MockNotice(error);
+        }
 		int effectTarget=InterlockedExchange(shared_volume+kMixerVstRequest,0)-1;
 		if(effectTarget>=0 && effectTarget<track_count) { int previous=track_fx_open; track_fx_open=effectTarget; AddVstEffect(); track_fx_open=previous; }
 		const int choice = InterlockedExchange(shared_volume + kMaxTracks * 2, 0) - 1;
