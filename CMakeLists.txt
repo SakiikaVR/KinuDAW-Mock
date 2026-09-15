@@ -83,7 +83,7 @@ mark_as_advanced(RMLUI_WARNINGS_AS_ERRORS)
 # KinuUI ships with profiling in the regular build configurations. Tracy is
 # configured on-demand, so the instrumentation remains dormant until a
 # profiler connects. Allocation ownership is provided by mimalloc below.
-set(RMLUI_TRACY_PROFILING ON CACHE BOOL "Enable profiling with the bundled Tracy client." FORCE)
+option(RMLUI_TRACY_PROFILING "Enable profiling with the bundled Tracy client (development only)." OFF)
 set(RMLUI_TRACY_MEMORY_PROFILING OFF CACHE BOOL "Use mimalloc instead of Tracy's global new/delete override." FORCE)
 set(RMLUI_TRACY_CONFIGURATION OFF CACHE BOOL "Instrument the regular build configurations." FORCE)
 

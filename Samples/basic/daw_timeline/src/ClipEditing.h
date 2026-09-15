@@ -68,7 +68,13 @@ void RestoreClips(const ClipSnapshot& snapshot)
 	{
 		auto* state = FindClip(saved.state.id);
 		if (!state) { clips.push_back(saved.state); state = &clips.back(); CreateSavedClip(saved); }
-		else *state = saved.state;
+		else {
+			*state = saved.state;
+			if(auto* element=Get(saved.state.id.c_str())) {
+				if(ClipTrack(element)!=saved.track) { auto moved=element->GetParentNode()->RemoveChild(element); Get(Rml::CreateString("track-lane-%d",saved.track).c_str())->AppendChild(std::move(moved)); }
+				element->SetInnerRML(saved.markup); element->SetAttribute("class",saved.classes); element->SetClass("dragging",false);
+			}
+		}
 		UpdateClipGeometry(*state);
 	}
 	SetSelected(".clip", Get(snapshot.selected.c_str()));
@@ -90,6 +96,7 @@ void UndoClips(bool redo)
 	destination.push_back(CaptureClips());
 	auto snapshot = std::move(source.back()); source.pop_back();
 	RestoreClips(snapshot);
+	for(int t=0;t<kMaxTracks;++t) if(piano_processes[t] && WaitForSingleObject(piano_processes[t],0)==WAIT_TIMEOUT) PreparePiano(t);
 }
 
 void CopyClip()

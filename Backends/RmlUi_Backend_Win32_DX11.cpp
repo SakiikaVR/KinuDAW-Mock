@@ -202,6 +202,9 @@ bool Backend::Initialize(const char* window_name, int width, int height, bool al
 #endif
 
 	data->render_interface.emplace(data->device_resources.pd3dDevice);
+	// WM_SIZE can arrive during CreateWindow, before the renderer exists. Set
+	// the first viewport explicitly so initial frames never allocate 0x0 layers.
+	data->render_interface->SetViewport(data->window_dimensions.x, data->window_dimensions.y);
 
 	data->window_handle = window_handle;
 	data->system_interface.SetWindow(window_handle);

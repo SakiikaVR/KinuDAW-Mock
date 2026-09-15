@@ -4,3 +4,9 @@
 [submodule "Dependencies/mimalloc"]
 	path = Dependencies/mimalloc
 	url = https://github.com/microsoft/mimalloc.git
+[submodule "Dependencies/vst3sdk"]
+	path = Dependencies/vst3sdk
+	url = https://github.com/steinbergmedia/vst3sdk.git
+[submodule "Dependencies/freetype"]
+	path = Dependencies/freetype
+	url = https://github.com/freetype/freetype.git

@@ -30,6 +30,7 @@ void InitialiseTrackRecordButton(int track)
 
 void StopMockRecording()
 {
+	if(mock_recording) FinishRecording();
 	for (auto& clip : mock_record_clips) clip = nullptr;
 	mock_recording = false;
 	Get("mock-record")->SetClass("active", false);
@@ -55,7 +56,7 @@ void RefreshMockTrackExtent()
 
 int AddMockTrack(bool audio, bool automation = false, const Rml::String& instrument = "")
 {
-	if (track_count >= kMaxTracks) { MockNotice(u8"UIモックはMASTERを含め32トラックまでです"); return -1; }
+	if (track_count >= kMaxTracks) { MockNotice(u8"MASTERを含め32トラックまでです"); return -1; }
 	EndTrackRename(true); EndClipDrag();
 	const int track = track_count++;
 	track_audio[track] = audio;
@@ -83,7 +84,8 @@ int AddMockTrack(bool audio, bool automation = false, const Rml::String& instrum
 	auto lane = document->CreateElement("div");
 	lane->SetClass("lane", true);
 	lane->SetId(Rml::CreateString("track-lane-%d", track));
-	lane->SetInnerRML(Rml::CreateString("<span class=\"empty-track-hint\">%s</span>", automation ? u8"Automation / パラメーター未接続" : audio ? u8"WAVなどをドロップ / RECで録音モック" : Rml::StringUtilities::EncodeRml(instrument + " / VST3 UI mock").c_str()));
+	if(!audio && !automation) lane->SetAttribute("ondblclick",Rml::CreateString("open-piano:%d",track));
+	lane->SetInnerRML(Rml::CreateString("<span class=\"empty-track-hint\">%s</span>", automation ? "Automation" : audio ? u8"音声をドロップ / RECで録音" : Rml::StringUtilities::EncodeRml(instrument + u8" / ダブルクリックでMIDI編集").c_str()));
 	Get("lane-canvas")->AppendChild(std::move(lane));
 	ApplyTrackOrder();
 	ApplyTrackColor(track, track_color_presets[track]);
@@ -91,7 +93,7 @@ int AddMockTrack(bool audio, bool automation = false, const Rml::String& instrum
 	SetSelected(".track-header", Get(Rml::CreateString("track-header-%d", track).c_str()));
 	SetText("selection-name", track_names[track]);
 	if (audio) selected_audio_track = track;
-	MockNotice(automation ? u8"Automationトラックを追加 / パラメーター未接続" : audio ? u8"Audioトラックを追加 / ファイル・録音はUIモック" : instrument + u8" を選択 / VST3は実行しません");
+	MockNotice(automation ? u8"Automationトラックを追加" : audio ? u8"Audioトラックを追加" : instrument+u8" を読み込み中");
 	context->Update();
 	Get("lane-canvas")->SetScrollTop(std::max(0.f, track_count * 46.f * context->GetDensityIndependentPixelRatio() - Get("lane-canvas")->GetClientHeight()));
 	RefreshMockTrackExtent();
@@ -100,6 +102,7 @@ int AddMockTrack(bool audio, bool automation = false, const Rml::String& instrum
 
 ClipState* AddMockAudioClip(int track, const Rml::String& label, float beat, float length, bool recording = false)
 {
+	if(clips.size()>=Kinu::MaxClips) { MockNotice(u8"クリップ数の上限（256）に達しました"); return nullptr; }
 	if (track < 0 || track >= track_count || track == 5 || (!recording && !track_audio[track])) return nullptr;
 	auto* lane = Get(Rml::CreateString("track-lane-%d", track).c_str());
 	if (auto* hint = lane->QuerySelector(".empty-track-hint")) hint->SetProperty("display", "none");
@@ -111,52 +114,40 @@ ClipState* AddMockAudioClip(int track, const Rml::String& label, float beat, flo
 	if (!track_automation[track]) clip->SetAttribute("ondblclick", Rml::CreateString("open-piano:%d", track));
 	clip->SetAttribute("onmousedown", "clip-drag:" + state.id);
 	clip->SetAttribute("onclick", "clip:" + label);
-	clip->SetInnerRML("<b>" + Rml::StringUtilities::EncodeRml(label) + u8"</b><span class=\"waveform\">▁▃▆▂▄▇▃▅▂▆▁▃▅▇▃▂▅▁▃▆▂▄▇▃▅▂</span>");
+	clip->SetInnerRML("<b>" + Rml::StringUtilities::EncodeRml(label) + "</b>");
 	lane->AppendChild(std::move(clip));
 	ApplyTrackColor(track, track_color_presets[track]); UpdateClipGeometry(state);
 	return &state;
 }
 
-void ToggleMockRecording()
-{
-	if (mock_recording)
-	{
-		StopMockRecording(); playing = false;
-		Get("play-button")->SetClass("active", false); SetText("play-label", "PLAY");
-		MockNotice(u8"録音モックを終了 / 音声ファイルは生成しません");
-		return;
-	}
-	int armed = 0;
-	for (int track = 0; track < track_count; ++track) if (track != 5 && track_record_armed[track]) ++armed;
-	if (!armed) { MockNotice(u8"録音するトラックの白丸をクリックして赤くしてください"); return; }
-	SaveClipUndo(); armed = 0;
-	for (int track = 0; track < track_count; ++track)
-	{
-		if (track == 5 || !track_record_armed[track]) continue;
-		mock_record_clips[track] = AddMockAudioClip(track, track_automation[track] ? u8"Automation録音（モック）" : track_audio[track] ? u8"マイク録音（モック）" : u8"MIDI録音（モック）", playhead_beat, .25f, true);
-		if (mock_record_clips[track]) ++armed;
-	}
-	if (!armed) { MockNotice(u8"録音するトラックの白丸をクリックして赤くしてください"); return; }
-	mock_recording = true;
-	mock_record_start = Rml::GetSystemInterface()->GetElapsedTime();
-	playing = true; Get("mock-record")->SetClass("active", true);
-	Get("play-button")->SetClass("active", true); SetText("play-label", "PAUSE");
-	MockNotice(u8"録音モック中 / マイクにはアクセスしていません / RECで終了");
-}
+void ToggleMockRecording() { ToggleRecording(); }
 
 void UpdateMockTracks()
 {
 #if defined RMLUI_PLATFORM_WIN32
 	if (shared_volume)
 	{
+		int effectTarget=InterlockedExchange(shared_volume+kMixerVstRequest,0)-1;
+		if(effectTarget>=0 && effectTarget<track_count) { int previous=track_fx_open; track_fx_open=effectTarget; AddVstEffect(); track_fx_open=previous; }
 		const int choice = InterlockedExchange(shared_volume + kMaxTracks * 2, 0) - 1;
-		if (choice >= 0 && choice < kMockInstrumentCount) AddMockTrack(false, false, mock_instruments[choice].name);
+		if (choice >= 0 && choice < kMockInstrumentCount && audio_engine) {
+			int target=InterlockedExchange(shared_volume+kMaxTracks*2+1,0)-1;
+			int slot=std::clamp(int(InterlockedExchange(shared_volume+kMaxTracks*3+2,0)),0,3);
+			const auto& info=installed_plugins[choice];
+			if(target<0) target=AddMockTrack(info.category.find("Instrument")==std::string::npos,false,info.name);
+			std::string error;
+			if(target>=0 && audio_engine->loadPlugin(target,info,error,slot)) {
+				if(!slot) project_plugins[target]=info; else project_effects[target][slot-1].info=info;
+				try { if(!slot) cached_plugin_states[target]=audio_engine->pluginState(target); else project_effects[target][slot-1].state=audio_engine->pluginState(target,slot); } catch(...) {}
+				MockNotice(info.name+u8" を別プロセスで読み込みました");
+			} else MockNotice(error);
+		}
 	}
 	for (const auto& drop : mock_audio_drops)
 	{
 		const auto& path = drop.first;
 		Rml::String extension = Rml::StringUtilities::ToLower(path.extension().u8string());
-		if (extension != ".wav" && extension != ".mp3" && extension != ".flac" && extension != ".ogg" && extension != ".aif" && extension != ".aiff") { MockNotice(u8"WAV / MP3 / FLAC / OGG / AIFFのファイルを選んでください"); continue; }
+		if (extension != ".wav" && extension != ".mp3" && extension != ".flac") { MockNotice(u8"WAV / MP3 / FLACのファイルを選んでください"); continue; }
 		int target = -1;
 		for (int track = 0; track < track_count; ++track)
 		{
@@ -165,9 +156,7 @@ void UpdateMockTracks()
 		}
 		if (target < 0) { MockNotice(u8"Audioトラックの行にドロップしてください"); continue; }
 		auto* lane = Get(Rml::CreateString("track-lane-%d", target).c_str());
-		SaveClipUndo();
-		AddMockAudioClip(target, path.filename().u8string(), (drop.second.x - lane->GetAbsoluteLeft()) / pixels_per_beat, 16.f);
-		MockNotice(u8"ファイル名をクリップ表示 / 長さ・波形はモックです");
+		ImportAudioFile(target,path,(drop.second.x-lane->GetAbsoluteLeft())/pixels_per_beat);
 	}
 	mock_audio_drops.clear();
 	if (instruments_process && WaitForSingleObject(instruments_process, 0) == WAIT_OBJECT_0)

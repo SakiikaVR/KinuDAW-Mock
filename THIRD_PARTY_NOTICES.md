@@ -1,12 +1,21 @@
 # Third-party notices
 
-KinuUI is derived from RmlUi and retains its MIT license and copyright notices in `LICENSE.txt`.
+KinuDAW and the bundled KinuUI/RmlUi sources are distributed under the MIT license in LICENSE.txt. Dependencies retain their own copyright and license notices.
 
-Mandatory source dependencies are pinned as Git submodules:
+| Component | Version/source | License |
+| --- | --- | --- |
+| VST3 SDK | Steinberg SDK 3.8.1, pinned recursive Git submodules | MIT, Dependencies/vst3sdk/LICENSE.txt |
+| miniaudio | 0.11.23 | MIT or public domain; this distribution uses MIT, Dependencies/audio/LICENSE.miniaudio |
+| nlohmann/json | 3.12.0 | MIT, Dependencies/audio/LICENSE.json |
+| mimalloc | pinned Git submodule | MIT, Dependencies/mimalloc/LICENSE |
+| FreeType | 2.14.1, pinned Git submodule | FreeType License (FTL), Dependencies/freetype/docs/FTL.TXT |
+| LINE Seed JP | bundled unmodified font | SIL Open Font License 1.1, Samples/basic/daw_timeline/data/fonts/OFL.txt |
+| Lato, Noto Emoji and other sample fonts | bundled unmodified fonts | Individual notices in Samples/assets/LICENSE.txt |
 
-- mimalloc 3.5.1 — MIT License. See `Dependencies/mimalloc/LICENSE`.
-- Tracy 0.14.1 — 3-Clause BSD License. See `Dependencies/tracy/LICENSE`.
+Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved. This build uses the FreeType License, rather than its alternative GPL license. The release ZIP includes the FTL notice.
 
-The Animate.css conversion utility accepts a separately obtained stylesheet and preserves its source license header. Animate.css is not redistributed by KinuUI.
+Tracy is an optional upstream profiling dependency, licensed BSD-3-Clause in Dependencies/tracy/LICENSE. It is disabled in the DAW production build.
 
-The motion demo is visually inspired by `yui540/css-animations`, which is MIT-licensed. No source image or video assets from that project are redistributed.
+Installed VST3 plug-ins and their sample libraries remain the property of their vendors. They are loaded from the user's computer and are not included in the source or release ZIP. Their licenses are independent of KinuDAW's MIT license. VST is a trademark of Steinberg Media Technologies GmbH.
+
+The Windows build uses the Microsoft Visual C++ runtime. Install the Microsoft Visual C++ v14 x64 Redistributable if it is absent; this runtime is not included in the MIT license or ZIP.

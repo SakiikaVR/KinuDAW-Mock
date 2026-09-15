@@ -20,16 +20,65 @@
 #include <deque>
 #include <list>
 #include <vector>
+#include "AudioEngine.h"
+#include "json.hpp"
+#include <cstring>
 
 #if defined RMLUI_PLATFORM_WIN32
 	#include <RmlUi_Include_Windows.h>
 	#include <shellapi.h>
 	#include <dwmapi.h>
+	#include <commdlg.h>
+	#include <mmsystem.h>
 	#pragma comment(lib, "dwmapi.lib")
 #endif
 
 namespace {
+class DawSystem final : public Rml::SystemInterface {
+public:
+    Rml::SystemInterface* base=nullptr; std::ofstream log;
+    double GetElapsedTime() override { return base->GetElapsedTime(); }
+    void JoinPath(Rml::String& translated,const Rml::String& document,const Rml::String& path) override { base->JoinPath(translated,document,path); }
+    bool LogMessage(Rml::Log::Type type,const Rml::String& message) override {
+        if(!log.is_open()) { wchar_t executable[32768]{}; GetModuleFileNameW(nullptr,executable,32768); log.open(std::filesystem::path(executable).parent_path()/("kinu-ui-"+std::to_string(GetCurrentProcessId())+".log")); }
+        if(log) { log<<int(type)<<": "<<message<<"\n"; log.flush(); }
+        return base->LogMessage(type,message);
+    }
+    void SetMouseCursor(const Rml::String& cursor) override { base->SetMouseCursor(cursor); }
+    void SetClipboardText(const Rml::String& text) override { base->SetClipboardText(text); }
+    void GetClipboardText(Rml::String& text) override { base->GetClipboardText(text); }
+    void ActivateKeyboard(Rml::Vector2f caret,float height) override { base->ActivateKeyboard(caret,height); }
+    void DeactivateKeyboard() override { base->DeactivateKeyboard(); }
+};
 constexpr int kMaxTracks = 32;
+std::unique_ptr<Kinu::AudioEngine> audio_engine;
+std::array<std::vector<unsigned char>,kMaxTracks> cached_plugin_states;
+std::array<Kinu::PluginInfo,kMaxTracks> project_plugins;
+struct EffectCache { Kinu::PluginInfo info; std::vector<unsigned char> state; };
+std::array<std::array<EffectCache,3>,kMaxTracks> project_effects;
+int instrument_target = -1;
+int instrument_slot=0;
+bool ui_test=false;
+float ui_density=0;
+void AddVstEffect();
+void MockNotice(const Rml::String& text);
+void SyncAudio();
+void SaveProject(bool recovery = false);
+void LoadProject();
+void ImportAudioDialog();
+void ExportAudio();
+void ImportAudioFile(int track,const std::filesystem::path& path,float beat);
+void PreparePiano(int track);
+void ToggleRecording();
+void FinishRecording();
+void RecordMidi(int track,int pitch,int velocity,bool on);
+void ExternalMidi(DWORD packed);
+void PianoRelease();
+void AddVolumeAutomation();
+void AutomationClick(int track,Rml::Event& event);
+void MoveAutomation(Rml::Event& event);
+void EndAutomationGesture();
+void AudioSettings(Rml::Element* trigger);
 int track_count = 6;
 bool track_audio[kMaxTracks] = {false, false, false, true, true, false};
 bool track_automation[kMaxTracks] = {};
@@ -52,6 +101,10 @@ struct ClipState {
 	Rml::String label;
 	float start_beat;
 	float length_beats;
+	const Kinu::AudioFile* audio = nullptr;
+	std::vector<Kinu::Note> notes;
+	double source_offset = 0;
+	double pattern_length = 16;
 };
 
 std::list<ClipState> clips = {
@@ -72,6 +125,7 @@ struct ClipDragSession {
 	float clip_start_beat = 0.f;
 	float clip_length_beats = 0.f;
 	int resize_edge = 0; // -1: left, +1: right, 0: move
+	double source_offset = 0;
 };
 
 Rml::Context* context = nullptr;
@@ -202,11 +256,13 @@ void OpenPianoWindow(int track)
 {
 	if (track < 0 || track >= track_count) return;
 #if defined RMLUI_PLATFORM_WIN32
-	OpenToolWindow(piano_processes[track], piano_process_ids[track], L"--piano=" + std::to_wstring(track));
+	if(track_audio[track] || track_automation[track] || track==5) return;
+	PreparePiano(track);
+	OpenToolWindow(piano_processes[track], piano_process_ids[track], L"--piano=" + std::to_wstring(track)+L" --session="+std::to_wstring(mixer_session_id));
 #endif
 }
 
-#include "PianoRollView.h"
+#include "PianoEditor.h"
 
 void SetSelected(const char* selector, Rml::Element* selected)
 {
@@ -367,6 +423,7 @@ void BeginClipDrag(Rml::Event& event, const Rml::String& clip_id, Rml::Element* 
 	Get("clip-context-menu")->SetClass("open", false); clip_menu_id.clear();
 	const float mouse_x = event.GetParameter("mouse_x", 0.f);
 	clip_drag = {clip, element, mouse_x, clip->start_beat, clip->length_beats, ClipResizeEdge(element, mouse_x)};
+	clip_drag.source_offset=clip->source_offset;
 	element->SetClass("dragging", true);
 	SetSelected(".clip", element);
 	SetText("selection-name", clip->label);
@@ -387,6 +444,11 @@ void MoveClipDrag(Rml::Event& event)
 	{
 		clip_drag.clip->start_beat = std::clamp(SnapBeat(clip_drag.clip_start_beat + delta_beats), 0.f, std::max(0.f, end - minimum));
 		clip_drag.clip->length_beats = end - clip_drag.clip->start_beat;
+		if(clip_drag.clip->audio) {
+			double offset=clip_drag.source_offset+(clip_drag.clip->start_beat-clip_drag.clip_start_beat)*60/bpm;
+			if(offset<0) { clip_drag.clip->start_beat=clip_drag.clip_start_beat-float(clip_drag.source_offset*bpm/60); offset=0; clip_drag.clip->length_beats=end-clip_drag.clip->start_beat; }
+			clip_drag.clip->source_offset=offset;
+		}
 	}
 	else
 	{
@@ -403,7 +465,7 @@ void EndClipDrag()
 	{
 		auto snapshot = CaptureClips();
 		for (auto& saved : snapshot.clips) if (saved.state.id == clip_drag.clip->id)
-		{ saved.state.start_beat = clip_drag.clip_start_beat; saved.state.length_beats = clip_drag.clip_length_beats; }
+		{ saved.state.start_beat = clip_drag.clip_start_beat; saved.state.length_beats = clip_drag.clip_length_beats; saved.state.source_offset=clip_drag.source_offset; }
 		SaveClipUndo(std::move(snapshot));
 	}
 	if (clip_drag.element)
@@ -411,9 +473,10 @@ void EndClipDrag()
 	clip_drag = {};
 }
 
-#include "InstrumentPicker.h"
+#include "PluginCatalog.h"
 #include "MockTracks.h"
 #include "PluginMock.h"
+#include "Project.h"
 void EndPluginGesture() { plugin_drag_param = -1; }
 
 void UpdatePluginAutomation()
@@ -479,13 +542,44 @@ public:
 
 	void ProcessEvent(Rml::Event& event) override
 	{
+		try { DispatchEvent(event); }
+		catch(const std::exception& e) { MockNotice(e.what()); }
+	}
+	void DispatchEvent(Rml::Event& event)
+	{
+		if(PianoCommand(command,event)) return;
 		if (command == "exit")
 			Backend::RequestExit();
+		else if (command == "project-save") SaveProject();
+		else if (command == "project-open") LoadProject();
+		else if (command == "audio-import") ImportAudioDialog();
+		else if (command == "audio-export") ExportAudio();
+		else if(command=="audio-settings") AudioSettings(element);
+		else if(command=="vst-scan") StartPluginScan();
+		else if(command=="vst-effect-add") AddVstEffect();
+		else if(command.rfind("vst-effect-remove:",0)==0 && audio_engine) {
+			int t=std::atoi(command.c_str()+18),slot=std::atoi(command.c_str()+command.find_last_of(':')+1); std::string error;
+			if(t>=0 && t<track_count && slot>=0 && slot<4 && audio_engine->unloadPlugin(t,error,slot)) { if(!slot) { project_plugins[t]={}; cached_plugin_states[t].clear(); } else project_effects[t][slot-1]={}; DismissTrackFx(); }
+			if(!error.empty()) MockNotice(error);
+		}
+		else if(command.rfind("vst-effect-edit:",0)==0 && audio_engine) {
+			int t=std::atoi(command.c_str()+16),slot=std::atoi(command.c_str()+command.find_last_of(':')+1); std::string error;
+			if(audio_engine->pluginHealthy(t,slot)) audio_engine->editor(t,error,slot);
+			else if(auto* info=audio_engine->pluginInfo(t,slot)) { Kinu::PluginInfo copy=*info; if(audio_engine->loadPlugin(t,copy,error,slot)) audio_engine->editor(t,error,slot); }
+			if(!error.empty()) MockNotice(error);
+		}
 		else if (command.rfind("open-plugin:", 0) == 0)
 		{
 			const int track = std::atoi(command.c_str() + 12);
 #if defined RMLUI_PLATFORM_WIN32
-			if (track >= 0 && track < track_count && !track_automation[track]) OpenToolWindow(plugin_processes[track], plugin_process_ids[track], L"--plugin=" + std::to_wstring(track) + L" --session=" + std::to_wstring(mixer_session_id));
+			if (track >= 0 && track < track_count && !track_automation[track] && audio_engine) {
+				std::string error;
+				if (audio_engine->hasPlugin(track)) {
+					if(!audio_engine->pluginHealthy(track)) { auto info=*audio_engine->pluginInfo(track); if(audio_engine->loadPlugin(track,info,error)) audio_engine->restorePluginState(track,cached_plugin_states[track]); }
+					if (!audio_engine->editor(track,error)) MockNotice(error);
+				}
+				else OpenToolWindow(instruments_process,instruments_process_id,L"--instruments --target="+std::to_wstring(track)+L" --session="+std::to_wstring(mixer_session_id));
+			}
 #endif
 			event.StopPropagation();
 		}
@@ -535,7 +629,8 @@ public:
 			InterlockedCompareExchange(&plugin_shared->request, plugin_track * kPluginParams + param + 1, 0);
 		}
 		else if (command == "add-audio") AddMockTrack(true);
-		else if (command == "add-automation") AddMockTrack(false, true);
+		else if (command == "add-automation") AddVolumeAutomation();
+		else if(command.rfind("automation-point:",0)==0) AutomationClick(std::atoi(command.c_str()+17),event);
 		else if (command == "add-instruments")
 		{
 #if defined RMLUI_PLATFORM_WIN32
@@ -656,8 +751,10 @@ public:
 		else if (command.rfind("track-effect:", 0) == 0 && track_fx_open >= 0)
 		{
 			const int effect = std::atoi(command.c_str() + command.find_last_of(':') + 1);
+			if(effect<0 || effect>2) return;
 			bool& enabled = track_channels[track_fx_open].effects[effect];
 			enabled = !enabled; element->SetClass("active", enabled);
+			if(shared_volume) { LONG flags=0; for(int i=0;i<3;++i) if(track_channels[track_fx_open].effects[i]) flags|=1<<i; InterlockedExchange(shared_volume+kFxStateBase+track_fx_open,flags); }
 			bool any = false; for (bool fx : track_channels[track_fx_open].effects) any |= fx;
 			Get(Rml::CreateString("track-fx-%d", track_fx_open).c_str())->SetClass("active", any);
 			event.StopPropagation();
@@ -706,6 +803,9 @@ public:
 			mixer_fader_dragging = false; mixer_drag_channel = -1;
 		}
 		else if (command == "mixer-fader-reset") { mixer_gain_db = 0.f; UpdateMixerGain(); }
+		else if(command.rfind("mixer-builtin:",0)==0) {
+			int i=std::atoi(command.c_str()+14); if(i>=0 && i<3 && shared_volume) { InterlockedXor(shared_volume+kFxStateBase+mixer_selected_channel,1<<i); ShowMixerRack(); }
+		}
 		else if (command == "mixer-add-effect")
 		{
 			AddMixerEffect();
@@ -876,12 +976,13 @@ public:
 		else if (command.rfind("clip-drag:", 0) == 0)
 			BeginClipDrag(event, command.substr(10), element);
 		else if (command == "clip-drag-move")
-		{ MoveTempo(event); MoveTrackOrder(event); MoveTrackKnob(event); MoveClipDrag(event); }
+		{ MoveTempo(event); MoveTrackOrder(event); MoveTrackKnob(event); MoveClipDrag(event); MoveAutomation(event); }
 		else if (command == "clip-drag-end")
 		{
 			// Child mouseleave events must not terminate a drag across controls.
 			if (event.GetType() == "mouseleave" && event.GetTargetElement() != element) return;
 			EndTrackOrder(event.GetType() == "mouseup");
+			EndAutomationGesture();
 			tempo_dragging = false;
 			track_knob_drag = {};
 			scrubbing = false;
@@ -934,7 +1035,9 @@ bool DawKeyDown(Rml::Context* key_context, Rml::Input::KeyIdentifier key, int mo
 			}
 			if (modifiers & Rml::Input::KM_CTRL)
 			{
-				if (key == Rml::Input::KI_Z) UndoClips(false);
+				if (key == Rml::Input::KI_S) SaveProject();
+				else if (key == Rml::Input::KI_O) LoadProject();
+				else if (key == Rml::Input::KI_Z) UndoClips(false);
 				else if (key == Rml::Input::KI_Y) UndoClips(true);
 				else if (key == Rml::Input::KI_C) CopyClip();
 				else if (key == Rml::Input::KI_V) PasteClip();
@@ -981,13 +1084,19 @@ int main(int argc, char** argv)
 {
 #if defined RMLUI_PLATFORM_WIN32
 	const std::string arguments(command_line ? command_line : "");
+	ui_test=arguments.find("--ui-test")!=std::string::npos;
+	const auto density_argument=arguments.find("--ui-density="); if(density_argument!=std::string::npos) ui_density=std::clamp(float(std::atof(arguments.c_str()+density_argument+13)),.5f,2.f);
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 	mixer_window = arguments.find("--mixer") != std::string::npos;
 	instrument_window = arguments.find("--instruments") != std::string::npos;
+	const auto target_argument=arguments.find("--target=");
+	if(target_argument!=std::string::npos) instrument_target=std::atoi(arguments.c_str()+target_argument+9);
+	const auto slot_argument=arguments.find("--slot="); if(slot_argument!=std::string::npos) instrument_slot=std::clamp(std::atoi(arguments.c_str()+slot_argument+7),0,3);
 	const size_t plugin_argument = arguments.find("--plugin=");
 	if (plugin_argument != std::string::npos) plugin_track = std::atoi(arguments.c_str() + plugin_argument + 9);
 	const size_t session_argument = arguments.find("--session=");
 	mixer_session_id = session_argument == std::string::npos ? GetCurrentProcessId() : std::strtoul(arguments.c_str() + session_argument + 10, nullptr, 10);
-	if ((mixer_window || instrument_window || plugin_track >= 0) && session_argument != std::string::npos)
+	if ((mixer_window || instrument_window || plugin_track >= 0 || arguments.find("--piano=")!=std::string::npos) && session_argument != std::string::npos)
 		mixer_owner_process = OpenProcess(SYNCHRONIZE, FALSE, mixer_session_id);
 	const size_t piano_argument = arguments.find("--piano=");
 	if (piano_argument != std::string::npos) piano_track = std::atoi(arguments.c_str() + piano_argument + 8);
@@ -1007,7 +1116,7 @@ int main(int argc, char** argv)
 	if (piano_track >= 6) track_names[piano_track] = "instruments";
 	const int window_width = plugin_track >= 0 ? 620 : instrument_window ? 620 : piano_window ? 1080 : mixer_window ? 900 : 1440;
 	const int window_height = plugin_track >= 0 ? 620 : instrument_window ? 610 : piano_window ? 640 : mixer_window ? 480 : 900;
-	const Rml::String window_title = plugin_track >= 0 ? Rml::CreateString("Kinu VST3 Mock - Track %d", plugin_track + 1) : instrument_window ? "KinuUI Instruments" : piano_window ? Rml::String("KinuUI Piano Roll - ") + track_names[piano_track] : mixer_window ? "KinuUI DAW Mixer" : "KinuUI DAW Timeline";
+	const Rml::String window_title = plugin_track >= 0 ? Rml::CreateString("Kinu Parameters - Track %d", plugin_track + 1) : instrument_window ? "KinuDAW VST3" : piano_window ? Rml::String("KinuDAW Piano Roll - ") + track_names[piano_track] : mixer_window ? "KinuDAW Mixer" : "KinuDAW";
 	if (!Shell::Initialize()) return -1;
 	if (!Backend::Initialize(window_title.c_str(), window_width, window_height, true))
 	{
@@ -1018,11 +1127,13 @@ int main(int argc, char** argv)
 	ApplyDarkNativeTitleBar();
 #endif
 
-	Rml::SetSystemInterface(Backend::GetSystemInterface());
+	DawSystem daw_system; daw_system.base=Backend::GetSystemInterface();
+	Rml::SetSystemInterface(&daw_system);
 	Rml::SetRenderInterface(Backend::GetRenderInterface());
 	if (!Rml::Initialise()) return -1;
 	context = Rml::CreateContext("daw", {window_width, window_height});
 	if (!context) return -1;
+	if(ui_density>0) context->SetDensityIndependentPixelRatio(ui_density);
 
 	Rml::Debugger::Initialise(context);
 	TimelineEventInstancer event_instancer;
@@ -1041,7 +1152,9 @@ int main(int argc, char** argv)
 	document = context->LoadDocument(plugin_track >= 0 ? "basic/daw_timeline/data/plugin.rml" : instrument_window ? "basic/daw_timeline/data/instruments.rml" : piano_window ? "basic/daw_timeline/data/piano_roll.rml" : mixer_window ? "basic/daw_timeline/data/mixer.rml" : "basic/daw_timeline/data/timeline.rml");
 	if (!document) return -1;
 	if (!piano_window) InitialiseVolumeSync();
+	LoadPluginCatalog();
 	InitialisePluginState();
+	InitialisePianoShared();
 	document->Show();
 	context->Update();
 	if (plugin_track >= 0) InitialisePluginWindow();
@@ -1050,12 +1163,35 @@ int main(int argc, char** argv)
 	else if (mixer_window) InitialiseMixerTracks();
 	else { ApplyTrackOrder(); UpdateTimelineGeometry(); UpdatePlayhead(); for (int track = 0; track < track_count; ++track) { InitialiseTrackRecordButton(track); ApplyTrackColor(track, track_color_presets[track]); UpdateTrackKnobs(track); } SetText("selection-name", "TRACK1"); }
 	previous_frame = std::chrono::steady_clock::now();
+	if (!mixer_window && !piano_window && !instrument_window && plugin_track < 0) {
+		for (const auto& clip:clips) if(auto* e=Get(clip.id.c_str())) e->GetParentNode()->RemoveChild(e);
+		clips.clear(); audio_engine=std::make_unique<Kinu::AudioEngine>(); SyncAudio();
+		for(int t=0;t<track_count;++t) if(!track_audio[t] && t!=5) Get(Rml::CreateString("track-lane-%d",t).c_str())->SetAttribute("ondblclick",Rml::CreateString("open-piano:%d",t));
+		std::string error; if(!audio_engine->start(error)) MockNotice(error);
+		else MockNotice(Rml::CreateString("WASAPI / 48 kHz / %.2f ms device period",audio_engine->bufferFrames()*1000./audio_engine->nativeSampleRate()));
+	}
 #if defined RMLUI_PLATFORM_WIN32
 	InstallNativeResize();
+	if(audio_engine) InitialiseMidiInput();
 	if (!mixer_window && !piano_window && !instrument_window && plugin_track < 0) DragAcceptFiles(daw_native_window, TRUE);
+	if(audio_engine && ui_test) {
+		ImportAudioFile(3,BinaryFolder()/"ui-tone.wav",0);
+		SaveClipUndo(); auto* midi=AddMockAudioClip(0,"MIDI",0,16,true); if(midi) midi->notes={{60,100,0,.5},{64,90,1,.5},{67,110,2,1}};
+		custom_track_names[3]=u8"音声録音・日本語の長いトラック名を確認するテスト"; ApplyTrackOrder();
+		SetSelected(".track-header",Get("track-header-3")); AddVolumeAutomation();
+		volume_automation[track_count-1].points={{0,0},{4,-24},{8,0}}; RefreshAutomation(track_count-1);
+		for(const auto& p:installed_plugins) if(p.name=="Vital") { std::string error; audio_engine->loadPlugin(0,p,error); break; }
+		project_path=BinaryFolder()/"ui-test.kinu"; SaveProject();
+		if(midi) midi->start_beat=12;
+		LoadProjectFile(project_path);
+		bool roundTrip=false; for(const auto& c:clips) if(!c.notes.empty() && c.start_beat==0) roundTrip=true;
+		{ std::ofstream report(BinaryFolder()/"ui-test-result.json"); report<<nlohmann::json({{"projectRoundTrip",roundTrip},{"clips",clips.size()},{"tracks",track_count},{"vitalLoaded",audio_engine->hasPlugin(0)}}).dump(2); }
+		OpenPianoWindow(0); OpenMixerWindow(); playing=true; looping=true; loop_end_beat=4; Get("play-button")->SetClass("active",true); SetText("play-label","PAUSE"); SyncAudio();
+	}
 #endif
 
 	bool running = true;
+	if(audio_engine && !std::filesystem::exists(BinaryFolder()/"plugins.json")) StartPluginScan();
 	while (running)
 	{
 		bool volume_peer_active = mixer_window || instrument_window || plugin_track >= 0;
@@ -1065,24 +1201,35 @@ int main(int argc, char** argv)
 		for (HANDLE process : plugin_processes) volume_peer_active |= process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
 		if (MixerOwnerExited()) break;
 #endif
-		running = Backend::ProcessEvents(context, &DawKeyDown, !volume_peer_active && !playing);
+		running = Backend::ProcessEvents(context, &DawKeyDown, !volume_peer_active && !playing && !audio_engine);
 		if (!running) break;
+		if(ui_density>0 && std::abs(context->GetDensityIndependentPixelRatio()-ui_density)>.001f) context->SetDensityIndependentPixelRatio(ui_density);
+		if(catalog_scan_process && WaitForSingleObject(catalog_scan_process,0)!=WAIT_TIMEOUT) {
+			DWORD code=1; GetExitCodeProcess(catalog_scan_process,&code); CloseHandle(catalog_scan_process); catalog_scan_process=nullptr;
+			// Picker indices remain stable until any currently open picker closes.
+			if(instruments_process) { TerminateProcess(instruments_process,0); CloseHandle(instruments_process); instruments_process=nullptr; if(shared_volume) InterlockedExchange(shared_volume+kMaxTracks*2,0); }
+			LoadPluginCatalog(); MockNotice(code==0?u8"VST3の検出が完了しました":u8"VST3スキャンに失敗しました");
+		}
 		if (!piano_window && !instrument_window && plugin_track < 0) ReadVolumeSync();
 		const auto now = std::chrono::steady_clock::now();
 		const float delta_seconds = std::chrono::duration<float>(now - previous_frame).count();
 		previous_frame = now;
+		if(audio_engine) { ReadPianoEdits(); SyncAudio(); }
+		if(audio_engine) RefreshAutomationGeometry();
 		if (playing && !scrubbing)
 		{
-			playhead_beat += delta_seconds * bpm / 60.f;
+			if(audio_engine) playhead_beat=float(audio_engine->position());
+			else playhead_beat += delta_seconds * bpm / 60.f;
 			const float playback_end = looping ? loop_end_beat : kProjectBars * kBeatsPerBar;
 			if (playhead_beat >= playback_end)
-				playhead_beat = looping ? loop_start_beat : 0.f;
+				{ playhead_beat = looping ? loop_start_beat : 0.f; if(audio_engine && !looping) { StopMockRecording(); playing=false; Get("play-button")->SetClass("active",false); SetText("play-label","PLAY"); } }
 			UpdatePlayhead();
+			if(audio_engine) audio_last_position=playhead_beat;
 		}
 		if (plugin_track >= 0) UpdatePluginWindow();
 		else if (instrument_window) {}
 		else if (piano_window) UpdatePianoRoll();
-		else if (!mixer_window) { UpdateMockTracks(); UpdatePluginAutomation(); PublishMixerTracks(); UpdateTrackMeters(float(Rml::GetSystemInterface()->GetElapsedTime())); }
+		else if (!mixer_window) { UpdateMockTracks(); PublishMixerTracks(); UpdateTrackMeters(float(Rml::GetSystemInterface()->GetElapsedTime())); }
 		else { ReadMixerTracks(); UpdateMixerMeters(Rml::GetSystemInterface()->GetElapsedTime()); }
 		context->Update();
 		Backend::BeginFrame();
@@ -1095,6 +1242,11 @@ int main(int argc, char** argv)
 		context->Render();
 		Backend::PresentFrame();
 	}
+	CloseMidiInput();
+	if(audio_engine) { StopMockRecording(); SaveProject(true); audio_engine.reset(); }
+	if(piano_shared && piano_track>=0) PianoRelease();
+	if(piano_shared) { UnmapViewOfFile(piano_shared); piano_shared=nullptr; }
+	if(piano_mapping) { CloseHandle(piano_mapping); piano_mapping=nullptr; }
 
 #if defined RMLUI_PLATFORM_WIN32
 	CloseNativeIntegration();
@@ -1109,6 +1261,7 @@ int main(int argc, char** argv)
 #if defined RMLUI_PLATFORM_WIN32
 	if (mixer_process) { CloseHandle(mixer_process); mixer_process = nullptr; }
 	if (instruments_process) CloseHandle(instruments_process);
+	if(catalog_scan_process) CloseHandle(catalog_scan_process);
 	for (HANDLE& process : piano_processes) if (process) { CloseHandle(process); process = nullptr; }
 	for (HANDLE& process : plugin_processes) if (process) { CloseHandle(process); process = nullptr; }
 #endif

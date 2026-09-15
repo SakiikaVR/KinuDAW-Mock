@@ -4,16 +4,16 @@
 	<link type="text/rcss" href="../../../assets/rml.rcss"/>
 	<link type="text/rcss" href="piano_roll.rcss"/>
 </head>
-<body>
+<body onmousemove="piano-move" onmouseup="piano-release" onmouseleave="piano-release">
 	<div id="piano-app">
-		<header class="piano-heading"><b>ピアノロール</b><strong id="piano-track-name"></strong><span>4小節 / モック</span></header>
+		<header class="piano-heading"><b>ピアノロール</b><strong id="piano-track-name"></strong><span>4小節</span></header>
 		<div class="piano-ruler-row"><b>鍵盤</b><div class="piano-ruler"><div id="piano-ruler-content"></div></div></div>
 		<main class="piano-board">
 			<aside class="piano-keyboard"><div id="piano-key-content"></div></aside>
-			<section id="piano-scroll"><div id="piano-grid"></div></section>
+			<section id="piano-scroll"><div id="piano-grid" ondblclick="piano-add"></div></section>
 		</main>
 		<section class="piano-velocity-row"><b>ベロシティ</b><div class="piano-velocity"><div id="piano-velocity-content"></div></div></section>
-		<footer class="piano-footer"><span>LINE Seed JP Bold</span><b>ノート表示モック / 音声処理なし</b></footer>
+		<footer class="piano-footer"><span>ノートをダブルクリックで追加、右クリックで削除</span><b>ドラッグで移動・右端で長さ変更 / ホイールでベロシティ</b></footer>
 	</div>
 </body>
 </rml>

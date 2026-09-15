@@ -1,0 +1,27 @@
+name: KinuDAW Windows
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  daw:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Build and test
+        shell: pwsh
+        run: ./Tools/Build-KinuDAW.ps1
+      - name: Package
+        shell: pwsh
+        run: ./Tools/Package-KinuDAW.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: KinuDAW-windows-x64
+          path: Distribution/*.zip
+          if-no-files-found: error

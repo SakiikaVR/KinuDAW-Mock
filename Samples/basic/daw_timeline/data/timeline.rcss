@@ -205,3 +205,5 @@ button:hover { color: #eaf2f5; background: #222933; }
 	.transport-group { margin-right: 10dp; }
 	.tempo-block { display: none; }
 }
+.automation-point { position: absolute; width: 8dp; height: 8dp; border-radius: 4dp; background: #ffbc74; z-index: 8; }
+.track-fx-menu { max-height: 320dp; overflow-y: auto; }

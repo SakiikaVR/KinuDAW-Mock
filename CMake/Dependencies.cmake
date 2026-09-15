@@ -8,6 +8,16 @@
 
 if(RMLUI_FONT_ENGINE STREQUAL "freetype")
 	find_package("Freetype")
+	if(NOT TARGET Freetype::Freetype AND EXISTS "${PROJECT_SOURCE_DIR}/Dependencies/freetype/CMakeLists.txt")
+		set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+		set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+		set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+		set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+		set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+		add_subdirectory("${PROJECT_SOURCE_DIR}/Dependencies/freetype" "${CMAKE_BINARY_DIR}/freetype" EXCLUDE_FROM_ALL)
+		add_library(Freetype::Freetype ALIAS freetype)
+		install(TARGETS freetype EXPORT RmlUiTargets ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
+	endif()
 
 	if(FREETYPE_VERSION_STRING)
 		if(FREETYPE_VERSION_STRING VERSION_EQUAL "2.11.0" AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")

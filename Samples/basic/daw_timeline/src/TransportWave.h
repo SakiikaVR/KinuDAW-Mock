@@ -8,8 +8,10 @@ protected:
 		const Rml::Vector2f size = GetBox().GetSize(Rml::BoxArea::Content);
 		if (size.x <= 0 || size.y <= 0) return;
 		auto* renderer = GetRenderManager();
-		if (size != cached_size)
+		const double now=Rml::GetSystemInterface()->GetElapsedTime();
+		if (size != cached_size || now>=next_update)
 		{
+			next_update=now+1./30.;
 			cached_size = size;
 			const bool right = GetId() == "transport-wave-r";
 			wave = renderer->MakeGeometry(BuildMesh(size, right, false));
@@ -19,26 +21,26 @@ protected:
 		const auto old_scissor = renderer->GetScissorRegion();
 		const auto bounds = Rml::Rectanglei::FromPositionSize(Rml::Vector2i(int(origin.x), int(origin.y)), Rml::Vector2i(int(size.x), int(size.y)));
 		renderer->SetScissorRegion(bounds.IntersectIfValid(old_scissor));
-		const float offset = playing ? std::fmod(playhead_beat * size.x * .05f, size.x) : 0.f;
-		(playing ? wave : flat).Render(origin - Rml::Vector2f(offset, 0.f));
+		(audio_engine ? wave : flat).Render(origin);
 		if (old_scissor.Valid()) renderer->SetScissorRegion(old_scissor);
 		else renderer->DisableScissorRegion();
 	}
 private:
 	Rml::Vector2f cached_size;
 	Rml::Geometry wave, flat;
+	double next_update=0;
 	static Rml::Mesh BuildMesh(Rml::Vector2f size, bool right, bool stopped)
 	{
 		Rml::Mesh mesh;
 		const int count = stopped ? 1 : 128;
 		mesh.vertices.reserve(count * 4); mesh.indices.reserve(count * 6);
 		auto sample = [&](float x) {
-			const float phase = x / size.x * 6.2831853f;
-			return size.y * .5f + (stopped ? 0.f : size.y * (.27f * std::sin(phase * 5.f + (right ? .8f : 0.f)) + .10f * std::sin(phase * 12.f)));
+			const int index=std::clamp(int(x/size.x*Kinu::Block),0,Kinu::Block-1);
+			return size.y*.5f+(!stopped && audio_engine?std::clamp(audio_engine->waveSample(right?1:0,index),-1.f,1.f)*size.y*.45f:0.f);
 		};
 		for (int i = 0; i < count; ++i)
 		{
-			const float x0 = size.x * 2.f * i / count, x1 = size.x * 2.f * (i + 1) / count;
+			const float x0 = size.x * i / count, x1 = size.x * (i + 1) / count;
 			const float y0 = sample(x0), y1 = sample(x1);
 			const float dx = x1 - x0, dy = y1 - y0;
 			const float length = std::sqrt(dx * dx + dy * dy);

@@ -1,4 +1,5 @@
-// Session-local gain (slots 0..5, tenths of dB) and M/S flags (6..11).
+// Session-local gain, mute/solo, peaks, plugin requests and built-in FX flags.
+constexpr int kFxStateBase=kMaxTracks*3+3, kMixerVstRequest=kFxStateBase+kMaxTracks;
 #if defined RMLUI_PLATFORM_WIN32
 HANDLE volume_mapping = nullptr;
 volatile LONG* shared_volume = nullptr;
@@ -7,9 +8,9 @@ volatile LONG* shared_volume = nullptr;
 void InitialiseVolumeSync()
 {
 #if defined RMLUI_PLATFORM_WIN32
-	const std::wstring name = L"Local\\KinuDawChannelState-v2-" + std::to_wstring(mixer_session_id);
-	volume_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(LONG) * (kMaxTracks * 2 + 1), name.c_str());
-	if (volume_mapping) shared_volume = static_cast<volatile LONG*>(MapViewOfFile(volume_mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG) * (kMaxTracks * 2 + 1)));
+	const std::wstring name = L"Local\\KinuDawChannelState-v6-" + std::to_wstring(mixer_session_id);
+	volume_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(LONG) * (kMixerVstRequest+1), name.c_str());
+	if (volume_mapping) shared_volume = static_cast<volatile LONG*>(MapViewOfFile(volume_mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LONG) * (kMixerVstRequest+1)));
 	if (!shared_volume) { Rml::Log::Message(Rml::Log::LT_WARNING, "Volume synchronization unavailable."); return; }
 	for (int track = 0; track < track_count; ++track)
 	{

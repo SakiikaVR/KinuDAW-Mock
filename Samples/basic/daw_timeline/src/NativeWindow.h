@@ -28,6 +28,7 @@ void RenderNativeResize()
 
 LRESULT CALLBACK DawWindowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
+	if(message==WM_APP+20) { ExternalMidi(DWORD(lparam)); return 0; }
 	if (message == WM_DROPFILES)
 	{
 		HDROP drop = reinterpret_cast<HDROP>(wparam);
@@ -50,7 +51,9 @@ LRESULT CALLBACK DawWindowProcedure(HWND window, UINT message, WPARAM wparam, LP
 	{
 		scrubbing = false;
 		EndClipDrag();
+		EndAutomationGesture();
 		EndPluginGesture();
+		if(piano_track>=0) PianoRelease();
 	}
 	if (message == WM_ENTERSIZEMOVE)
 	{

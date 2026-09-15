@@ -14,8 +14,11 @@ body { width: 100%; height: 100%; margin: 0; overflow: hidden; color: #c3d0da; b
 .piano-keyboard { position: relative; flex: 0 0 68dp; width: 68dp; min-height: 0; overflow: hidden; clip: always; border-right: 1dp #52677d; background: #10131a; }
 #piano-key-content { position: absolute; top: 0; left: 0; width: 68dp; height: 1584dp; }
 .piano-key-white, .piano-key-black { position: absolute; left: 0; height: 18dp; padding-right: 6dp; border-bottom: 1dp #576779; font-size: 8dp; line-height: 17dp; text-align: right; }
-.piano-key-white { width: 68dp; color: #263440; background: #b9c7d2; }
-.piano-key-black { width: 47dp; color: #a8bccd; background: #1d2733; border-bottom-color: #0c1118; }
+.piano-key-white { width: 68dp; z-index: 0; color: #263440; background: #b9c7d2; }
+.piano-key-black { width: 47dp; z-index: 1; color: #a8bccd; background: #1d2733; border-bottom-color: #0c1118; }
+.piano-key-white:hover { background: #d4e3ed; }
+.piano-key-black:hover { background: #344858; }
+.piano-key-white.active, .piano-key-black.active { color: #092923; background: #69d9c1; }
 #piano-scroll { flex: 1 1 0; width: 0; min-width: 0; min-height: 0; overflow: auto; background: #0e1420; }
 #piano-grid { display: block; position: relative; width: 1024dp; height: 1584dp; overflow: hidden; clip: always; background: #111a2a; }
 .piano-row-white, .piano-row-black { position: absolute; left: 0; width: 100%; height: 18dp; border-bottom: 1dp #25334a; }

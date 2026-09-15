@@ -6,12 +6,12 @@
 </head>
 <body onmousemove="mixer-fader-move" onmouseup="mixer-fader-end" onmouseleave="mixer-fader-end">
 	<div id="mixer-app">
-		<header class="mixer-heading"><b>ミキサー</b><span>モック</span><button id="mixer-pin" title="最前面に固定" onclick="mixer-pin"><i class="pin-head"></i><i class="pin-neck"></i><i class="pin-base"></i><i class="pin-point"></i></button></header>
+		<header class="mixer-heading"><b>ミキサー</b><span>LIVE</span><button id="mixer-pin" title="最前面に固定" onclick="mixer-pin"><i class="pin-head"></i><i class="pin-neck"></i><i class="pin-base"></i><i class="pin-point"></i></button></header>
 		<main class="mixer-workspace">
 			<section class="current-meter">
-				<b>Current</b>
+				<b>Master</b>
 				<div class="meter-body">
-					<div class="stereo-meter"><div class="level-column"><i></i></div><div class="level-column"><i></i></div></div>
+					<div class="stereo-meter"><div class="level-column"><i id="current-meter-0"></i></div><div class="level-column"><i id="current-meter-1"></i></div></div>
 					<div class="db-scale"><span class="db-top">+6</span><span class="db-zero">0</span><span class="db-six">-6</span><span class="db-twelve">-12</span><span class="db-twentyfour">-24</span><span class="db-bottom">-48</span></div>
 				</div>
 			</section>
@@ -19,10 +19,10 @@
 			<aside class="effects-panel">
 				<header><b>ラック</b><span id="rack-channel-name">MASTER</span></header>
 				<div id="rack-scroll" class="effects-scroll"><p id="effects-empty">エフェクトなし</p><div id="mixer-effects"></div></div>
-				<button class="add-effect" onclick="mixer-add-effect">エフェクトを追加</button>
+				<button class="add-effect" onclick="mixer-add-effect">VST3を追加</button>
 			</aside>
 		</main>
-		<footer class="mixer-footer"><span>Master</span><small>フェーダーをドラッグ / ダブルクリックで0 dB</small><b>音声処理なし</b></footer>
+		<footer class="mixer-footer"><span>Master</span><small>フェーダーをドラッグ / ダブルクリックで0 dB</small><b>WASAPI</b></footer>
 	</div>
 </body>
 </rml>

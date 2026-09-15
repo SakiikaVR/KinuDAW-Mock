@@ -1,10 +1,10 @@
 <rml>
 <head><title>音源を選択</title><link type="text/rcss" href="../../../assets/rml.rcss"/><link type="text/rcss" href="instruments.rcss"/></head>
 <body><div id="instrument-app">
- <header><b>音源を選択</b><span>UIモック</span></header>
+ <header><b>VST3を選択</b><span>別プロセスで実行</span></header>
  <div class="instrument-search-box"><label>検索</label><input id="instrument-search" type="text" placeholder="音源名・カテゴリー・VST3" oninput="instrument-search" onchange="instrument-search"/></div>
  <div class="instrument-help">♥ お気に入りの音源はリストの上に固定されます</div>
  <main><div id="instrument-list"></div><p id="instrument-empty">該当する音源がありません</p></main>
- <footer><div><b id="instrument-selection">音源を選択してください</b><small>デモリスト / 実際のVST3は読み込みません</small></div><button onclick="exit">キャンセル</button><button id="instrument-add" onclick="instrument-add">トラックに追加</button></footer>
+ <footer><div><b id="instrument-selection">VST3を選択してください</b><small>インストール済みVST3</small></div><button onclick="exit">キャンセル</button><button id="instrument-add" onclick="instrument-add">読み込む</button></footer>
 </div></body>
 </rml>

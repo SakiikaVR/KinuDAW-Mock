@@ -8,6 +8,12 @@
 	<div id="app">
 		<nav class="menu-bar">
 			<button id="menu-file">ファイル</button>
+			<button onclick="project-open">開く</button>
+			<button onclick="project-save">保存</button>
+			<button onclick="audio-import">音声読み込み</button>
+			<button onclick="audio-export">WAV書き出し</button>
+			<button onclick="audio-settings">オーディオ設定</button>
+			<button onclick="vst-scan">VST3再検出</button>
 			<button id="menu-edit">編集</button>
 			<button id="menu-select">選択</button>
 			<button id="menu-view" onclick="view-menu">表示</button>
@@ -29,16 +35,16 @@
 			<div class="transport-group">
 				<button class="transport-button" onclick="stop"><span class="stop-icon"></span><small>STOP</small></button>
 				<button id="play-button" class="transport-button play" onclick="play"><span class="play-icon"></span><small id="play-label">PLAY</small></button>
-				<button id="mock-record" class="transport-button record" title="マイク録音（UIモック）" onclick="mock-record"><span class="record-icon"></span><small>REC</small></button>
+				<button id="mock-record" class="transport-button record" title="アームしたトラックへ音声・MIDI録音" onclick="mock-record"><span class="record-icon"></span><small>REC</small></button>
 				<button class="transport-button loop" title="ループ再生" onclick="loop"><span class="loop-icon"><i class="loop-forward"></i><i class="loop-back"></i><span class="loop-arrow-forward"></span><span class="loop-arrow-back"></span></span><small>LOOP</small></button>
 			</div>
 			<div class="position-block"><small>POSITION</small><b id="position"><span id="position-digit-0">0</span><span id="position-digit-1">1</span><i>.</i><span id="position-digit-2">0</span><span id="position-digit-3">1</span><i>.</i><span id="position-digit-4">0</span><span id="position-digit-5">0</span><span id="position-digit-6">0</span></b></div>
 			<div class="tempo-block"><small>TEMPO</small><b id="tempo-value" onmousedown="tempo-begin" title="上下ドラッグでテンポ変更">124.0</b><em>BPM</em></div>
-			<div class="meter" title="L/R波形モック：実音声ではありません"><div class="wave-row"><span>L</span><transport-wave id="transport-wave-l" class="wave-canvas"></transport-wave></div><div class="wave-row"><span>R</span><transport-wave id="transport-wave-r" class="wave-canvas"></transport-wave></div></div>
+			<div class="meter" title="マスター出力波形"><div class="wave-row"><span>L</span><transport-wave id="transport-wave-l" class="wave-canvas"></transport-wave></div><div class="wave-row"><span>R</span><transport-wave id="transport-wave-r" class="wave-canvas"></transport-wave></div></div>
 			<div class="zoom"><span>ZOOM</span><button onclick="zoom-out">-</button><b id="zoom-value">100%</b><button onclick="zoom-in">+</button></div>
 			<div class="transport-status">
 				<div class="status-row"><span>SELECTED</span><b id="selection-name">TRACK1</b><button id="snap-button" class="snap-button active" onclick="snap"><span>SNAP</span><b id="snap-value">1 / 16</b></button></div>
-				<div class="status-row"><span>RATE</span><b>48 kHz / 24 bit</b><em>CPU 08%</em></div>
+				<div class="status-row"><span>RATE</span><b>48 kHz / Float32</b><em id="audio-xruns">XRUN 0</em></div>
 			</div>
 		</section>
 
@@ -89,7 +95,7 @@
 			<div class="color-preset-row"><button id="color-preset-3" class="color-swatch cyan" onclick="color-preset:3" title="シアン"></button><button id="color-preset-4" class="color-swatch pink" onclick="color-preset:4" title="ピンク"></button><button id="color-preset-5" class="color-swatch mint" onclick="color-preset:5" title="ミント"></button></div>
 			<div class="color-preset-row"><button id="color-preset-6" class="color-swatch blue" onclick="color-preset:6" title="ブルー"></button><button id="color-preset-7" class="color-swatch orange" onclick="color-preset:7" title="オレンジ"></button><button id="color-preset-8" class="color-swatch slate" onclick="color-preset:8" title="グレー"></button></div>
 		</div>
-		<div id="track-fx-menu" class="track-fx-menu"><b>エフェクトチェイン</b><span id="track-fx-name"></span><button id="track-effect-0" onclick="track-effect:0">EQ</button><button id="track-effect-1" onclick="track-effect:1">Compressor</button><button id="track-effect-2" onclick="track-effect:2">Reverb</button><small>モック / クリックでON・OFF</small></div>
+		<div id="track-fx-menu" class="track-fx-menu"><b>エフェクトチェイン</b><span id="track-fx-name"></span><button id="track-effect-0" onclick="track-effect:0">EQ</button><button id="track-effect-1" onclick="track-effect:1">Compressor</button><button id="track-effect-2" onclick="track-effect:2">Reverb</button><small>クリックでON・OFF</small></div>
 
 	</div>
 </body>
